@@ -30,8 +30,8 @@ from confluent_kafka import KafkaError, Message, Producer
 from app.config import Settings, load_settings, non_negative_float, positive_int
 from app.logging_config import configure_logging, log_kafka_client_error
 from app.run_summary import write_summary
-from app.schemas import TelemetryEvent
-from app.simulator import TelemetrySimulator
+from app.schemas import GroundTruthRecord, TelemetryEvent
+from app.simulator import Scenario, TelemetrySimulator
 
 logger = logging.getLogger(__name__)
 
@@ -187,13 +187,20 @@ def publish_events(
     interval_ms: float,
     tracker: DeliveryTracker,
     on_record: Callable[[dict[str, Any]], None] | None = None,
+    on_ground_truth: Callable[[GroundTruthRecord], None] | None = None,
 ) -> tuple[int, bool]:
     """Publish `count` events. Returns (attempted, interrupted)."""
     interval_s = interval_ms / 1000.0
     attempted = 0
     try:
-        for event in simulator.generate_events(count):
+        if on_ground_truth is None:
+            stream: Any = ((event, None) for event in simulator.generate_events(count))
+        else:
+            stream = simulator.generate_scenario_events(count)
+        for event, truth in stream:
             _produce_event(producer, topic, event, tracker, on_record=on_record)
+            if truth is not None and on_ground_truth is not None:
+                on_ground_truth(truth)
             attempted += 1
             producer.poll(0)  # Serve delivery callbacks without blocking.
             if interval_s > 0:
@@ -214,10 +221,18 @@ def run_producer(
     seed: int | None,
     flush_timeout_s: float,
     records_file: Path | None = None,
+    scenario: Scenario = Scenario.NORMAL,
+    anomaly_rate: float = 0.12,
+    ground_truth_file: Path | None = None,
 ) -> ProducerRunSummary:
     """Create a producer, publish events, flush, and summarise delivery results."""
     producer = Producer(build_producer_config(settings))
-    simulator = TelemetrySimulator(machine_count=settings.machine_count, seed=seed)
+    simulator = TelemetrySimulator(
+        machine_count=settings.machine_count,
+        seed=seed,
+        scenario=scenario,
+        anomaly_rate=anomaly_rate,
+    )
     tracker = DeliveryTracker()
     logger.info(
         "producer starting",
@@ -228,6 +243,7 @@ def run_producer(
                 "count": count,
                 "interval_ms": interval_ms,
                 "machines": settings.machine_count,
+                "scenario": scenario.value,
             }
         },
     )
@@ -243,6 +259,17 @@ def run_producer(
 
         on_record = _write_record
 
+    truth_handle = None
+    on_ground_truth: Callable[[GroundTruthRecord], None] | None = None
+    if ground_truth_file is not None:
+        ground_truth_file.parent.mkdir(parents=True, exist_ok=True)
+        truth_handle = ground_truth_file.open("w", encoding="utf-8")
+
+        def _write_truth(truth: GroundTruthRecord) -> None:
+            truth_handle.write(json.dumps(truth.to_dict(), separators=(",", ":")) + "\n")
+
+        on_ground_truth = _write_truth
+
     started = time.monotonic()
     try:
         attempted, interrupted = publish_events(
@@ -253,6 +280,7 @@ def run_producer(
             interval_ms,
             tracker,
             on_record=on_record,
+            on_ground_truth=on_ground_truth,
         )
         remaining = producer.flush(flush_timeout_s)
         if remaining > 0:
@@ -263,6 +291,8 @@ def run_producer(
     finally:
         if records_handle is not None:
             records_handle.close()
+        if truth_handle is not None:
+            truth_handle.close()
 
     return ProducerRunSummary(
         requested=count,
@@ -316,6 +346,25 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Optional path to write per-event JSONL delivery records",
     )
+    parser.add_argument(
+        "--scenario",
+        type=Scenario,
+        choices=list(Scenario),
+        default=Scenario.NORMAL,
+        help="Telemetry scenario: normal, anomalies, or drift (default: normal)",
+    )
+    parser.add_argument(
+        "--anomaly-rate",
+        type=non_negative_float,
+        default=0.12,
+        help="Anomaly injection probability for --scenario anomalies (default: 0.12)",
+    )
+    parser.add_argument(
+        "--ground-truth-file",
+        type=Path,
+        default=None,
+        help="Optional path to write separate ground-truth JSONL records",
+    )
     return parser.parse_args(argv)
 
 
@@ -334,6 +383,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.seed,
         args.flush_timeout_s,
         records_file=args.records_file,
+        scenario=args.scenario,
+        anomaly_rate=args.anomaly_rate,
+        ground_truth_file=args.ground_truth_file,
     )
     log_level = logging.INFO if summary.succeeded else logging.ERROR
     logger.log(log_level, "producer delivery summary", extra={"fields": summary.to_dict()})

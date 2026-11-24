@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # Create the telemetry topic and verify its partition count.
 #
-# Usage: scripts/create_topic.sh [--recreate]
+# Usage: scripts/create_topic.sh [--recreate] [--topic TOPIC]
 #   --recreate  delete the topic first (DESTROYS its data) for a clean run
+#   --topic     override KAFKA_TOPIC from .env
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
+
+recreate=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --recreate) recreate=true; shift ;;
+    --topic) KAFKA_TOPIC="${2:?--topic requires a topic name}"; shift 2 ;;
+    *) fail "Unknown argument: $1" ;;
+  esac
+done
 
 require_docker
 
@@ -12,7 +22,7 @@ topic_exists() {
   kafka_cli kafka-topics.sh --list | grep -Fxq "${KAFKA_TOPIC}"
 }
 
-if [[ "${1:-}" == "--recreate" ]] && topic_exists; then
+if [[ "${recreate}" == "true" ]] && topic_exists; then
   log "Deleting topic '${KAFKA_TOPIC}' for a clean run..."
   kafka_cli kafka-topics.sh --delete --topic "${KAFKA_TOPIC}"
   # Deletion is asynchronous; wait until the broker no longer lists the topic.

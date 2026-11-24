@@ -173,7 +173,20 @@ make check
 
 ---
 
-## 10. Automated Streaming Reports
+## 10. Milestone 2 (M2): Synthetic Anomalies & Baseline Detection
+
+M2 extends the pipeline with three reproducible telemetry scenarios (`normal`, `anomalies` with spikes & stuck sensors, and `drift` with gradual baseline shift) and a static threshold-based detection consumer (`app/detector.py`) that reads from `research.telemetry.raw` and publishes alerts to `research.telemetry.alerts`.
+
+- **Label separation**: Ground-truth labels are written to a separate `ground_truth.jsonl` file by the producer. Kafka payloads keep `label="normal"` and `SensorReading` strips `label` so the detector never sees ground truth.
+- **Run M2 end-to-end**:
+  ```bash
+  make m2-demo
+  ```
+- **Evaluation report**: Saved under `reports/m2/<run_id>/` (`report.md`, `report.json`, `evaluations.csv`) with confusion matrix (`TP/FP/TN/FN`), precision, recall, F1, false-positive rate, anomaly breakdown, throughput, and latency.
+
+---
+
+## 11. Automated Streaming Reports
 
 Every successful `make demo` run generates a structured report bundle under `reports/runs/<run_id>/` (ignored by git so experiment outputs are never committed):
 

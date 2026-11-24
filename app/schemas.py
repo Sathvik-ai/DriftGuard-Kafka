@@ -29,13 +29,16 @@ class SchemaValidationError(ValueError):
 
 
 class EventLabel(str, Enum):
-    """Ground-truth label reserved for future experiments.
+    """Ground-truth label for telemetry events.
 
-    M1 only produces normal behaviour. Later milestones (synthetic anomaly
-    scenarios) will add further members here.
+    M1 only produces `NORMAL`. M2 introduces synthetic `SPIKE`, `STUCK`, and
+    `DRIFT` ground-truth labels (stored separately from the detector).
     """
 
     NORMAL = "normal"
+    SPIKE = "spike"
+    STUCK = "stuck"
+    DRIFT = "drift"
 
 
 @dataclass(frozen=True)
@@ -200,3 +203,24 @@ def parse_event_json(payload: bytes | str | None) -> TelemetryEvent:
     except json.JSONDecodeError as error:
         raise SchemaValidationError(f"message value is not valid JSON: {error}") from error
     return TelemetryEvent.from_dict(decoded)
+
+
+@dataclass(frozen=True)
+class GroundTruthRecord:
+    """Ground-truth annotation stored separately from the Kafka detector stream."""
+
+    event_id: str
+    machine_id: str
+    scenario: str
+    ground_truth_label: EventLabel
+    is_anomaly: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serialisable dictionary for ground-truth JSONL logs."""
+        return {
+            "event_id": self.event_id,
+            "machine_id": self.machine_id,
+            "scenario": self.scenario,
+            "ground_truth_label": self.ground_truth_label.value,
+            "is_anomaly": self.is_anomaly,
+        }

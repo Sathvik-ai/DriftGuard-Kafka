@@ -101,6 +101,36 @@ jobs:
           print(f"Validated report bundle in {out}")
           PY
 
+      - name: Run M2 anomaly detection demo and validate evaluation report
+        env:
+          PYTHON_BIN: python
+          DEMO_INTERVAL_MS: "2"
+          DEMO_SEED: "42"
+        run: |
+          ./scripts/run_m2_demo.sh 300
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+
+          m2_dirs = sorted(Path("reports/m2").iterdir())
+          assert len(m2_dirs) == 1, f"Expected 1 M2 report dir, got {m2_dirs}"
+          out = m2_dirs[0]
+          for name in ("report.md", "report.json", "evaluations.csv"):
+              path = out / name
+              assert path.exists() and path.stat().st_size > 0, f"Missing/empty {path}"
+
+          data = json.loads((out / "report.json").read_text(encoding="utf-8"))
+          assert len(data["scenarios"]) == 3
+          assert data["overall_metrics"]["tp"] > 0
+          for sc in data["scenarios"]:
+              assert sc["alerts"]["triggered"] == sc["alerts"]["delivered"]
+              assert sc["alerts"]["delivered"] == sc["alerts"]["verified_on_topic"]
+
+          with (out / "evaluations.csv").open(encoding="utf-8") as handle:
+              assert sum(1 for _ in csv.DictReader(handle)) == 900
+          print(f"Validated M2 report bundle in {out}")
+          PY
+
       - name: Print failure diagnostics
         if: failure()
         run: |
@@ -116,6 +146,7 @@ jobs:
           path: |
             runs/
             reports/runs/
+            reports/m2/
           if-no-files-found: warn
           retention-days: 7
 
