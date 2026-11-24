@@ -196,11 +196,14 @@ M3 adds online concept drift detection using **River ADWIN** (`river==0.27.0`) i
 
 - **Per-(machine, feature) isolation**: Maintains independent `ADWIN` monitors for `temperature_c`, `vibration_mm_s`, and `pressure_bar` scoped by `machine_id`, consuming unlabelled telemetry from `research.telemetry.raw` and publishing structured drift events to `research.telemetry.drift`.
 - **Scenarios**: Evaluates `normal` (stationary), `drift` (gradual baseline ramp), and `abrupt_drift` (step baseline shift). All drifted observations retain `normal` ground-truth labels, and static M2 anomaly thresholds remain unchanged (no adaptive threshold updates yet).
-- **Run M3 end-to-end**:
+- **Run M3 end-to-end & multi-seed robustness**:
   ```bash
-  make m3-demo
+  make m3-demo         # single-seed run + interactive HTML dashboard
+  make m3-robustness   # 10-seed Kafka robustness sweep (30 runs = 15,000 events)
   ```
-- **Reports & Streaming Dashboard**: Saved under `reports/m3/<run_id>/` (`report.md`, `report.json`, `channel_evaluations.csv`, and interactive `dashboard.html` plotting per-machine streaming points, static threshold bands, drift onset boundaries, and ADWIN detections).
+- **Reports & Streaming Dashboard**:
+  - Single-run bundle under `reports/m3/<run_id>/` (`report.md`, `report.json`, `channel_evaluations.csv`, and `dashboard.html`), distinguishing `first_episode_detections` from `repeated_episode_alerts` during continuous gradual ramps.
+  - Multi-seed robustness bundle under `reports/m3/robustness_<run_id>/` (`robustness_report.md`, `robustness_report.json`, `seed_runs.csv`) reporting `mean ± std [min, max]` across 10 seeds.
 
 ---
 

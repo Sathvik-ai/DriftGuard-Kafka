@@ -101,6 +101,7 @@ def evaluate_m3_scenario(
     onset_by_machine: dict[
         str, tuple[int, int]
     ] = {}  # machine_id -> (machine_pos, prod_stream_idx)
+    last_prod_idx_by_machine: dict[str, int] = {}
     machines_seen: set[str] = set()
     stable_obs_count = 0
     latencies_ms: list[float] = []
@@ -115,6 +116,13 @@ def evaluate_m3_scenario(
         machines_seen.add(machine_id)
         machine_pos = int(obs["machine_position"])
         prod_stream_idx = int(obs_truth.get("stream_index", obs["stream_position"]))
+        prev_prod_idx = last_prod_idx_by_machine.get(machine_id)
+        if prev_prod_idx is not None and prod_stream_idx <= prev_prod_idx:
+            raise SummaryError(
+                f"out-of-order per-machine observation on {machine_id}: "
+                f"{prod_stream_idx} after {prev_prod_idx}"
+            )
+        last_prod_idx_by_machine[machine_id] = prod_stream_idx
         drift_active = bool(obs_truth.get("drift_active", False))
 
         if not drift_active:
@@ -153,12 +161,21 @@ def evaluate_m3_scenario(
 
     expected_channels = 0
     detected_channels = 0
+    repeated_episode_alerts = 0
     false_alarms_stable = 0
     delays_machine: list[int] = []
     delays_stream: list[int] = []
     channel_rows: list[dict[str, Any]] = []
     per_feature: dict[str, dict[str, Any]] = {
-        feat: {"expected": 0, "detected": 0, "missed": 0, "false_alarms_stable": 0, "delays": []}
+        feat: {
+            "expected": 0,
+            "detected": 0,
+            "missed": 0,
+            "repeated_episode_alerts": 0,
+            "total_alerts": 0,
+            "false_alarms_stable": 0,
+            "delays": [],
+        }
         for feat in MONITORED_FEATURES
     }
 
@@ -170,18 +187,27 @@ def evaluate_m3_scenario(
                 key=lambda item: int(item["machine_position"]),
             )
             ch_false_alarms = 0
+            ch_repeated = 0
             first_post_onset: Mapping[str, Any] | None = None
 
             for ev in ch_events:
-                ev_truth = truth_by_id.get(str(ev["event_id"]))
-                is_active = bool(ev_truth.get("drift_active", False)) if ev_truth else False
+                ev_id = str(ev["event_id"])
+                ev_truth = truth_by_id.get(ev_id)
+                if ev_truth is None:
+                    raise SummaryError(f"missing ground truth for drift event {ev_id}")
+                is_active = bool(ev_truth.get("drift_active", False))
                 if not is_active:
                     ch_false_alarms += 1
                 elif first_post_onset is None:
                     first_post_onset = ev
+                else:
+                    ch_repeated += 1
 
             false_alarms_stable += ch_false_alarms
+            repeated_episode_alerts += ch_repeated
             per_feature[feature]["false_alarms_stable"] += ch_false_alarms
+            per_feature[feature]["repeated_episode_alerts"] += ch_repeated
+            per_feature[feature]["total_alerts"] += len(ch_events)
 
             if onset is None:
                 channel_rows.append(
@@ -195,6 +221,8 @@ def evaluate_m3_scenario(
                         "delay_machine_samples": None,
                         "delay_stream_events": None,
                         "status": "stable_false_alarm" if ch_false_alarms > 0 else "stable_clean",
+                        "repeated_episode_alerts": 0,
+                        "total_alerts": len(ch_events),
                         "false_alarms_stable": ch_false_alarms,
                     }
                 )
@@ -226,6 +254,8 @@ def evaluate_m3_scenario(
                             "delay_machine_samples": m_delay,
                             "delay_stream_events": s_delay,
                             "status": "detected",
+                            "repeated_episode_alerts": ch_repeated,
+                            "total_alerts": len(ch_events),
                             "false_alarms_stable": ch_false_alarms,
                         }
                     )
@@ -242,11 +272,14 @@ def evaluate_m3_scenario(
                             "delay_machine_samples": None,
                             "delay_stream_events": None,
                             "status": "missed",
+                            "repeated_episode_alerts": 0,
+                            "total_alerts": len(ch_events),
                             "false_alarms_stable": ch_false_alarms,
                         }
                     )
 
     missed_channels = expected_channels - detected_channels
+    total_adwin_alerts = detected_channels + repeated_episode_alerts + false_alarms_stable
     detection_rate = (
         round(detected_channels / expected_channels, 4) if expected_channels > 0 else None
     )
@@ -260,6 +293,9 @@ def evaluate_m3_scenario(
             "expected": info["expected"],
             "detected": info["detected"],
             "missed": info["missed"],
+            "first_episode_detections": info["detected"],
+            "repeated_episode_alerts": info["repeated_episode_alerts"],
+            "total_alerts": info["total_alerts"],
             "false_alarms_stable": info["false_alarms_stable"],
             "mean_delay_machine_samples": (
                 round(sum(info["delays"]) / len(info["delays"]), 2) if info["delays"] else None
@@ -285,6 +321,9 @@ def evaluate_m3_scenario(
         "drift_metrics": {
             "expected_drift_channels": expected_channels,
             "detected_drift_channels": detected_channels,
+            "first_episode_detections": detected_channels,
+            "repeated_episode_alerts": repeated_episode_alerts,
+            "total_adwin_alerts": total_adwin_alerts,
             "missed_drift_channels": missed_channels,
             "detection_rate": detection_rate,
             "false_alarms_stable": false_alarms_stable,
@@ -319,6 +358,7 @@ def build_m3_report(
     """Aggregate M3 scenario evaluations into the top-level report."""
     expected = sum(int(s["drift_metrics"]["expected_drift_channels"]) for s in scenario_results)
     detected = sum(int(s["drift_metrics"]["detected_drift_channels"]) for s in scenario_results)
+    repeated = sum(int(s["drift_metrics"]["repeated_episode_alerts"]) for s in scenario_results)
     missed = sum(int(s["drift_metrics"]["missed_drift_channels"]) for s in scenario_results)
     false_alarms = sum(int(s["drift_metrics"]["false_alarms_stable"]) for s in scenario_results)
     trig = sum(int(s["drift_topic"]["triggered"]) for s in scenario_results)
@@ -351,6 +391,8 @@ def build_m3_report(
         "overall_metrics": {
             "expected_drift_channels": expected,
             "detected_drift_channels": detected,
+            "first_episode_detections": detected,
+            "repeated_episode_alerts": repeated,
             "missed_drift_channels": missed,
             "detection_rate": round(detected / expected, 4) if expected > 0 else None,
             "false_alarms_stable": false_alarms,
@@ -401,10 +443,10 @@ def render_m3_markdown(report: Mapping[str, Any]) -> str:
         "",
         "## 2. Per-Scenario Results",
         "",
-        "| Scenario | Events | Expected/Detected/Missed | Detection Rate | Stable False Alarms | "
-        "Delay Mean / p50 / p95 (samples) | Unchanged Static Alerts | Drift Topic (Trig/Del/Ver) | "
-        "Throughput |",
-        "|---|---:|---|---:|---:|---|---:|---|---:|",
+        "| Scenario | Events | Expected/Detected/Missed | Detection Rate | "
+        "First / Repeated / Stable FA | Delay Mean / p50 / p95 (samples) | "
+        "Unchanged Static Alerts | Drift Topic (Trig/Del/Ver) | Throughput |",
+        "|---|---:|---|---:|---|---:|---:|---|---:|",
     ]
     for sc in report["scenarios"]:
         dm = sc["drift_metrics"]
@@ -416,11 +458,15 @@ def render_m3_markdown(report: Mapping[str, Any]) -> str:
             f"{dm['expected_drift_channels']}/{dm['detected_drift_channels']}/"
             f"{dm['missed_drift_channels']}"
         )
+        ep_str = (
+            f"{dm['first_episode_detections']} / {dm['repeated_episode_alerts']} / "
+            f"{dm['false_alarms_stable']}"
+        )
         dly_str = f"{_fmt(dly['mean'])} / {_fmt(dly['p50'])} / {_fmt(dly['p95'])}"
         dt_str = f"{dt['triggered']}/{dt['delivered']}/{_fmt(dt['verified_on_topic'])}"
         lines.append(
             f"| {sc['scenario']} | {ev['received']} | {ch_str} | {_fmt(dm['detection_rate'])} | "
-            f"{dm['false_alarms_stable']} | {dly_str} | {ev['static_alerts_observed']} | "
+            f"{ep_str} | {dly_str} | {ev['static_alerts_observed']} | "
             f"{dt_str} | {_fmt(tp_info['monitor_events_per_sec'], ' ev/s')} |"
         )
 
@@ -429,16 +475,17 @@ def render_m3_markdown(report: Mapping[str, Any]) -> str:
             "",
             "## 3. Per-Feature Breakdown",
             "",
-            "| Scenario | Feature | Expected | Detected | Missed | Stable False Alarms | "
-            "Mean Delay (Machine Samples) |",
-            "|---|---|---:|---:|---:|---:|---:|",
+            "| Scenario | Feature | Expected | First Detected | Missed | "
+            "Repeated Alerts | Total Alerts | Stable False Alarms | Mean Delay (Machine Samples) |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for sc in report["scenarios"]:
         for feat, finfo in sc["per_feature"].items():
             lines.append(
                 f"| {sc['scenario']} | {feat} | {finfo['expected']} | {finfo['detected']} | "
-                f"{finfo['missed']} | {finfo['false_alarms_stable']} | "
+                f"{finfo['missed']} | {finfo['repeated_episode_alerts']} | "
+                f"{finfo['total_alerts']} | {finfo['false_alarms_stable']} | "
                 f"{_fmt(finfo['mean_delay_machine_samples'])} |"
             )
 
@@ -483,6 +530,8 @@ def write_m3_bundle(
                 "delay_machine_samples",
                 "delay_stream_events",
                 "status",
+                "repeated_episode_alerts",
+                "total_alerts",
                 "false_alarms_stable",
             ],
         )

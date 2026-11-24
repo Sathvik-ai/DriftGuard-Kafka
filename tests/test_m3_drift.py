@@ -426,3 +426,186 @@ class TestDriftPipelineAndReport:
         )
         assert sc_missed["drift_metrics"]["missed_drift_channels"] == 3
         assert all(r["status"] == "missed" for r in ch_missed)
+
+    def test_episode_vs_repeated_alerts_and_independent_fa_missed(self) -> None:
+        # 4 observations on machine_01: pos 0,1 stable; pos 2,3 drifted
+        gt = [
+            {
+                "event_id": f"e{i}",
+                "machine_id": "machine_01",
+                "ground_truth_label": "normal",
+                "is_anomaly": False,
+                "stream_index": i,
+                "drift_active": i >= 2,
+            }
+            for i in range(4)
+        ]
+        obs = [
+            {
+                "event_id": f"e{i}",
+                "machine_id": "machine_01",
+                "stream_position": i,
+                "machine_position": i,
+                "temperature_c": 50.0 + 10.0 * i,
+                "vibration_mm_s": 2.0,
+                "pressure_bar": 5.0,
+                "static_alert": False,
+                "drift_features": [],
+            }
+            for i in range(4)
+        ]
+        # temperature_c: 2 post-onset alerts (pos 2 first, pos 3 repeated)
+        # vibration_mm_s: 1 pre-onset false alarm (pos 1) AND 0 post-onset alerts (missed!)
+        # pressure_bar: 0 alerts (missed!)
+        drifts = [
+            {
+                "event_id": "e2",
+                "machine_id": "machine_01",
+                "feature": "temperature_c",
+                "machine_position": 2,
+                "stream_position": 2,
+            },
+            {
+                "event_id": "e3",
+                "machine_id": "machine_01",
+                "feature": "temperature_c",
+                "machine_position": 3,
+                "stream_position": 3,
+            },
+            {
+                "event_id": "e1",
+                "machine_id": "machine_01",
+                "feature": "vibration_mm_s",
+                "machine_position": 1,
+                "stream_position": 1,
+            },
+        ]
+        rep, rows, _ = evaluate_m3_scenario(
+            scenario="drift",
+            producer_summary={"delivered": 4, "duration_s": 0.1},
+            monitor_summary={
+                "received": 4,
+                "malformed": 0,
+                "static_alerts_observed": 0,
+                "drift_events_triggered": 3,
+                "drift_events_delivered": 3,
+                "drift_events_failed": 0,
+            },
+            producer_records=[],
+            ground_truth_records=gt,
+            drift_records=drifts,
+            observation_records=obs,
+            drift_verified=3,
+        )
+        dm = rep["drift_metrics"]
+        assert dm["expected_drift_channels"] == 3
+        assert dm["first_episode_detections"] == 1
+        assert dm["repeated_episode_alerts"] == 1
+        assert dm["false_alarms_stable"] == 1
+        assert dm["total_adwin_alerts"] == 3
+        assert dm["missed_drift_channels"] == 2
+        by_feat = {r["feature"]: r for r in rows}
+        assert by_feat["temperature_c"]["delay_machine_samples"] == 0
+        assert by_feat["temperature_c"]["repeated_episode_alerts"] == 1
+        assert by_feat["vibration_mm_s"]["status"] == "missed"
+        assert by_feat["vibration_mm_s"]["false_alarms_stable"] == 1
+
+    def test_missing_drift_gt_and_out_of_order_obs_raise_summary_error(self) -> None:
+        gt = [
+            {
+                "event_id": "e0",
+                "machine_id": "machine_01",
+                "ground_truth_label": "normal",
+                "is_anomaly": False,
+                "stream_index": 0,
+                "drift_active": False,
+            },
+            {
+                "event_id": "e1",
+                "machine_id": "machine_01",
+                "ground_truth_label": "normal",
+                "is_anomaly": False,
+                "stream_index": 1,
+                "drift_active": False,
+            },
+        ]
+        obs = [
+            {
+                "event_id": "e1",
+                "machine_id": "machine_01",
+                "stream_position": 0,
+                "machine_position": 0,
+                "temperature_c": 50.0,
+                "vibration_mm_s": 2.0,
+                "pressure_bar": 5.0,
+            },
+            {
+                "event_id": "e0",
+                "machine_id": "machine_01",
+                "stream_position": 1,
+                "machine_position": 1,
+                "temperature_c": 50.0,
+                "vibration_mm_s": 2.0,
+                "pressure_bar": 5.0,
+            },
+        ]
+        mon_sum = {
+            "received": 2,
+            "malformed": 0,
+            "static_alerts_observed": 0,
+            "drift_events_triggered": 0,
+            "drift_events_delivered": 0,
+            "drift_events_failed": 0,
+        }
+        with pytest.raises(SummaryError, match="out-of-order"):
+            evaluate_m3_scenario("normal", {"delivered": 2}, mon_sum, [], gt, [], obs)
+
+        with pytest.raises(SummaryError, match="missing ground truth for drift event"):
+            evaluate_m3_scenario(
+                "normal",
+                {"delivered": 2},
+                mon_sum,
+                [],
+                gt[:1],
+                [
+                    {
+                        "event_id": "unknown",
+                        "machine_id": "machine_01",
+                        "feature": "temperature_c",
+                        "machine_position": 0,
+                        "stream_position": 0,
+                    }
+                ],
+                obs[1:],
+            )
+
+    def test_multi_seed_robustness_inprocess_cli(self, tmp_path: Path) -> None:
+        from app.m3_robustness import main as robustness_main
+
+        out_dir = tmp_path / "robustness"
+        rc = robustness_main(
+            [
+                "--run-id",
+                "rob-test",
+                "--seeds",
+                "42",
+                "43",
+                "44",
+                "--count",
+                "300",
+                "--mode",
+                "inprocess",
+                "--output-dir",
+                str(out_dir),
+            ]
+        )
+        assert rc == 0
+        for name in ("robustness_report.json", "robustness_report.md", "seed_runs.csv"):
+            assert (out_dir / name).exists() and (out_dir / name).stat().st_size > 0
+        data = json.loads((out_dir / "robustness_report.json").read_text(encoding="utf-8"))
+        assert data["adwin_parameters"]["delta"] == 0.002
+        assert data["static_threshold_parameters"]["temp_max_c"] == 70.0
+        assert data["scenarios"]["normal"]["detection_rate"]["mean"] is None
+        assert data["scenarios"]["abrupt_drift"]["detection_rate"]["count"] == 3
+        with (out_dir / "seed_runs.csv").open(encoding="utf-8") as handle:
+            assert len(list(csv.DictReader(handle))) == 9

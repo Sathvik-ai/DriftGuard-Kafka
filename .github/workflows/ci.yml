@@ -166,12 +166,40 @@ jobs:
               dm = by_sc[sc_name]["drift_metrics"]
               assert dm["expected_drift_channels"] == 15
               assert dm["detected_drift_channels"] > 0
+              assert (
+                  dm["first_episode_detections"]
+                  + dm["repeated_episode_alerts"]
+                  + dm["false_alarms_stable"]
+                  == dm["total_adwin_alerts"]
+              )
               dt = by_sc[sc_name]["drift_topic"]
               assert dt["triggered"] == dt["delivered"] == dt["verified_on_topic"]
 
           with (out / "channel_evaluations.csv").open(encoding="utf-8") as handle:
               assert sum(1 for _ in csv.DictReader(handle)) == 45
           print(f"Validated M3 report & dashboard bundle in {out}")
+          PY
+
+      - name: Run 10-seed M3 robustness sweep over Kafka
+        env:
+          PYTHON_BIN: python
+        run: |
+          ./scripts/run_m3_robustness.sh 500
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+
+          rob_dirs = sorted(Path("reports/m3").glob("robustness_*"))
+          assert len(rob_dirs) == 1, f"Expected 1 robustness dir, got {rob_dirs}"
+          out = rob_dirs[0]
+          for name in ("robustness_report.json", "robustness_report.md", "seed_runs.csv"):
+              path = out / name
+              assert path.exists() and path.stat().st_size > 0, f"Missing/empty {path}"
+          data = json.loads((out / "robustness_report.json").read_text(encoding="utf-8"))
+          assert len(data["seeds"]) == 10
+          with (out / "seed_runs.csv").open(encoding="utf-8") as handle:
+              assert sum(1 for _ in csv.DictReader(handle)) == 30
+          print(f"Validated 10-seed robustness bundle in {out}")
           PY
 
       - name: Print failure diagnostics
