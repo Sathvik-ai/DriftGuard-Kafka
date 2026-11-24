@@ -1,0 +1,85 @@
+# DriftGuard-Kafka M1: one Apache Kafka broker in KRaft mode (no ZooKeeper).
+#
+# Based on the official Apache Kafka single-node example:
+#   https://github.com/apache/kafka/tree/trunk/docker/examples
+# Image: https://hub.docker.com/r/apache/kafka (multi-arch: arm64 + amd64,
+# so it runs natively on Apple Silicon and Intel Macs).
+#
+# Start:  docker compose up -d      Stop: docker compose down
+# Wipe data as well:                docker compose down -v
+#
+# NOTE: A single broker with replication factor 1 has NO fault tolerance.
+# If this container stops, the topic is unavailable until it restarts.
+
+name: driftguard-m1
+
+services:
+  kafka:
+    image: apache/kafka:4.3.2
+    container_name: driftguard-kafka
+    hostname: kafka
+    ports:
+      # Only the EXTERNAL listener is published to the Mac.
+      - "9092:9092"
+    environment:
+      # --- KRaft identity -------------------------------------------------
+      # This one node acts as both broker (stores data) and controller
+      # (manages cluster metadata) -- the job ZooKeeper used to do.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Fixed cluster ID (generated with `kafka-storage.sh random-uuid`).
+      # It is an identifier, not a secret.
+      CLUSTER_ID: OnRle78RSj685-RwVTX4hg
+
+      # --- Listeners --------------------------------------------------------
+      # LISTENERS = where the broker binds inside the container.
+      # ADVERTISED_LISTENERS = addresses the broker tells clients to use.
+      #   INTERNAL   kafka:19092     -> other containers / CLI tools in this container
+      #   EXTERNAL   localhost:9092  -> Python apps running on the Mac
+      #   CONTROLLER kafka:9093      -> KRaft controller traffic (never advertised)
+      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      # --- Single-broker settings --------------------------------------------
+      # Kafka's internal topics default to replication factor 3, which is
+      # impossible with one broker, so they must be set to 1.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      # Consumers join their group immediately instead of waiting 3 s.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+      # --- Topics ----------------------------------------------------------
+      # Topics must be created explicitly (scripts/create_topic.sh) so a typo
+      # in a topic name fails loudly instead of creating a 1-partition topic.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+
+      # --- Storage ---------------------------------------------------------
+      # Directory backed by the named volume below; owned by the image's
+      # non-root `appuser`, so no permission fixes are needed.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # JVM heap kept small for laptops.
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx1g
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Healthy once the broker answers API requests on its internal listener.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:19092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  kafka-data:
+    name: driftguard-m1-kafka-data

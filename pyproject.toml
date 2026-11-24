@@ -1,0 +1,39 @@
+# Tool configuration only; dependencies live in requirements*.txt.
+[project]
+name = "driftguard-kafka-m1"
+version = "0.1.0"
+description = "DriftGuard-Kafka Milestone 1: Python -> Apache Kafka -> Python telemetry pipeline"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort, N: naming, UP: pyupgrade,
+# B: bugbear, SIM: simplify, D: docstrings (public API), S: bandit security.
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "D", "S"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use plain asserts and don't need docstrings on every test.
+"tests/**" = ["S101", "D"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["app", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

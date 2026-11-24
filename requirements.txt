@@ -1,0 +1,3 @@
+# Runtime dependencies for DriftGuard-Kafka M1.
+# Pinned to exact, verified versions for reproducible research runs.
+confluent-kafka==2.16.2

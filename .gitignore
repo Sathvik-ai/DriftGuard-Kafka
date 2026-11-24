@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local configuration (may contain machine-specific values)
+.env
+
+# Demo run artefacts and generated reports
+runs/
+reports/
+
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
