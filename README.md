@@ -177,6 +177,10 @@ make check
 
 M2 extends the pipeline with three reproducible telemetry scenarios (`normal`, `anomalies` with spikes & stuck sensors, and `drift` with gradual baseline shift) and a static threshold-based detection consumer (`app/detector.py`) that reads from `research.telemetry.raw` and publishes alerts to `research.telemetry.alerts`.
 
+- **Scenario & ground-truth semantics**:
+  - `normal`: Stationary baseline operation (`ground_truth_label="normal"`, `is_anomaly=false`).
+  - `anomalies`: Independent `spike` and `stuck` fault injections (`is_anomaly=true`) mixed with `normal` readings.
+  - `drift`: Gradual shift in normal operating baselines (`ground_truth_label="normal"`, `is_anomaly=false`). Alerts triggered by static thresholds during pure drift are counted as **false positives (`FP`)**, quantifying baseline detector degradation under concept drift ahead of M3.
 - **Label separation**: Ground-truth labels are written to a separate `ground_truth.jsonl` file by the producer. Kafka payloads keep `label="normal"` and `SensorReading` strips `label` so the detector never sees ground truth.
 - **Run M2 end-to-end**:
   ```bash

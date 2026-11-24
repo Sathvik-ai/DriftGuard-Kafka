@@ -31,14 +31,15 @@ class SchemaValidationError(ValueError):
 class EventLabel(str, Enum):
     """Ground-truth label for telemetry events.
 
-    M1 only produces `NORMAL`. M2 introduces synthetic `SPIKE`, `STUCK`, and
-    `DRIFT` ground-truth labels (stored separately from the detector).
+    M1 only produces `NORMAL`. M2 introduces synthetic `SPIKE` and `STUCK`
+    fault labels (stored separately from the detector). Gradual operating-regime
+    drift retains `NORMAL` ground truth because drift is a shift in normal
+    behaviour rather than a point/sensor fault.
     """
 
     NORMAL = "normal"
     SPIKE = "spike"
     STUCK = "stuck"
-    DRIFT = "drift"
 
 
 @dataclass(frozen=True)

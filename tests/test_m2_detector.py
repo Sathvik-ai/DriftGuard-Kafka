@@ -37,17 +37,46 @@ class TestScenarios:
     def test_wire_events_never_expose_ground_truth_labels(self) -> None:
         for scenario in (Scenario.NORMAL, Scenario.ANOMALIES, Scenario.DRIFT):
             sim = TelemetrySimulator(machine_count=3, seed=42, scenario=scenario, anomaly_rate=0.25)
-            pairs = list(sim.generate_scenario_events(120))
-            assert len(pairs) == 120
-            assert all(ev.label is EventLabel.NORMAL for ev, _ in pairs)
-            if scenario is Scenario.NORMAL:
-                assert all(not gt.is_anomaly for _, gt in pairs)
-            elif scenario is Scenario.ANOMALIES:
-                labels = {gt.ground_truth_label for _, gt in pairs}
-                assert EventLabel.SPIKE in labels or EventLabel.STUCK in labels
+            pairs = list(sim.generate_scenario_events(200))
+            assert len(pairs) == 200
+            for ev, _ in pairs:
+                assert ev.label is EventLabel.NORMAL
+                wire_payload = json.loads(ev.to_json_bytes())
+                assert wire_payload["label"] == "normal"
+                assert "is_anomaly" not in wire_payload
+                assert "ground_truth_label" not in wire_payload
+
+    def test_gradual_drift_retains_normal_ground_truth_labels(self) -> None:
+        sim = TelemetrySimulator(machine_count=5, seed=42, scenario=Scenario.DRIFT)
+        pairs = list(sim.generate_scenario_events(300))
+        # Drift shifts sensor values upward in the second half of the stream,
+        # yet every event represents normal operating-pattern drift (not a fault).
+        assert pairs[-1][0].temperature_c > pairs[0][0].temperature_c
+        assert any(ev.temperature_c > 70.0 for ev, _ in pairs)
+        assert all(gt.ground_truth_label is EventLabel.NORMAL for _, gt in pairs)
+        assert all(gt.is_anomaly is False for _, gt in pairs)
+        assert all(gt.scenario == "drift" for _, gt in pairs)
+
+    def test_drift_is_not_an_anomaly_event_label(self) -> None:
+        from app.schemas import SchemaValidationError, TelemetryEvent
+
+        ev_dict = TelemetrySimulator(1, seed=1).generate_event().to_dict()
+        ev_dict["label"] = "drift"
+        with pytest.raises(SchemaValidationError, match="label"):
+            TelemetryEvent.from_dict(ev_dict)
+
+    def test_spikes_and_stuck_sensors_are_independently_labelled(self) -> None:
+        sim = TelemetrySimulator(
+            machine_count=5, seed=42, scenario=Scenario.ANOMALIES, anomaly_rate=0.12
+        )
+        pairs = list(sim.generate_scenario_events(300))
+        labels = {gt.ground_truth_label for _, gt in pairs}
+        assert labels == {EventLabel.NORMAL, EventLabel.SPIKE, EventLabel.STUCK}
+        for _, gt in pairs:
+            if gt.ground_truth_label is EventLabel.NORMAL:
+                assert gt.is_anomaly is False
             else:
-                labels = {gt.ground_truth_label for _, gt in pairs}
-                assert EventLabel.DRIFT in labels
+                assert gt.is_anomaly is True
 
     def test_scenario_generation_is_reproducible_with_seed(self) -> None:
         s1 = TelemetrySimulator(3, seed=99, scenario=Scenario.ANOMALIES, anomaly_rate=0.2)
@@ -83,9 +112,13 @@ class TestThresholdDetector:
         )
 
     def test_sensor_reading_strips_label(self) -> None:
+        import app.detector as detector_mod
+
         ev = TelemetrySimulator(1, seed=1).generate_event()
         reading = SensorReading.from_telemetry(ev)
         assert not hasattr(reading, "label")
+        assert "GroundTruthRecord" not in dir(detector_mod)
+        assert "EventLabel" not in dir(detector_mod)
 
     def test_normal_reading_passes(self) -> None:
         detector = ThresholdDetector()
@@ -319,18 +352,83 @@ class TestDetectorPipeline:
 
 
 class TestM2Report:
-    def test_classification_metrics_handle_zero_denominators(self) -> None:
-        m_empty = compute_classification_metrics(0, 0, 10, 0)
-        assert m_empty["precision"] is None
-        assert m_empty["recall"] is None
-        assert m_empty["f1"] is None
-        assert m_empty["false_positive_rate"] == 0.0
+    def test_classification_metrics_handle_zero_denominators_and_drift_fps(self) -> None:
+        # Pure normal scenario: 0 alerts, 0 anomalies
+        m_normal = compute_classification_metrics(0, 0, 300, 0)
+        assert m_normal == {
+            "tp": 0,
+            "fp": 0,
+            "tn": 300,
+            "fn": 0,
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "false_positive_rate": 0.0,
+        }
+
+        # Pure drift scenario: 0 true anomalies, 100 false-positive alerts on 300 normal events
+        m_drift = compute_classification_metrics(0, 100, 200, 0)
+        assert m_drift == {
+            "tp": 0,
+            "fp": 100,
+            "tn": 200,
+            "fn": 0,
+            "precision": 0.0,
+            "recall": None,
+            "f1": None,
+            "false_positive_rate": 0.3333,
+        }
+
+        # Detector fired false alarms AND missed all true anomalies -> F1 must be 0.0, not None
+        m_zero_tp = compute_classification_metrics(0, 5, 85, 10)
+        assert m_zero_tp == {
+            "tp": 0,
+            "fp": 5,
+            "tn": 85,
+            "fn": 10,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "false_positive_rate": 0.0556,
+        }
 
         m = compute_classification_metrics(8, 2, 88, 2)
         assert m["precision"] == 0.8
         assert m["recall"] == 0.8
         assert m["f1"] == 0.8
         assert m["false_positive_rate"] == 0.0222
+
+        with pytest.raises(ValueError, match="non-negative"):
+            compute_classification_metrics(-1, 0, 10, 0)
+
+    def test_evaluate_scenario_rejects_inconsistent_ground_truth(self) -> None:
+        from app.m2_report import evaluate_scenario
+        from app.run_summary import SummaryError
+
+        with pytest.raises(SummaryError, match="inconsistent ground truth"):
+            evaluate_scenario(
+                scenario="drift",
+                producer_summary={"delivered": 1},
+                detector_summary={
+                    "received": 1,
+                    "malformed": 0,
+                    "alerts_triggered": 0,
+                    "alerts_delivered": 0,
+                    "alerts_failed": 0,
+                },
+                producer_records=[{"event_id": "e1"}],
+                ground_truth_records=[
+                    {
+                        "event_id": "e1",
+                        "machine_id": "machine_01",
+                        "ground_truth_label": "normal",
+                        "is_anomaly": True,
+                    }
+                ],
+                detection_records=[
+                    {"event_id": "e1", "predicted_anomaly": False, "reason": "normal"}
+                ],
+            )
 
     def test_evaluate_scenario_and_write_bundle(self, tmp_path: Path) -> None:
         sc_dir = tmp_path / "run" / "anomalies"

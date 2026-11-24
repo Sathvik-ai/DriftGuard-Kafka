@@ -27,7 +27,7 @@ from app.report import (
     load_jsonl_records,
 )
 from app.run_summary import SummaryError, load_summary
-from app.schemas import format_utc_timestamp
+from app.schemas import EventLabel, format_utc_timestamp
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float | None:
@@ -39,12 +39,21 @@ def _safe_ratio(numerator: int, denominator: int) -> float | None:
 def compute_classification_metrics(
     tp: int, fp: int, tn: int, fn: int
 ) -> dict[str, int | float | None]:
-    """Compute confusion matrix and binary classification metrics."""
+    """Compute confusion matrix and binary classification metrics.
+
+    - Precision = TP / (TP + FP), or None when TP + FP == 0.
+    - Recall    = TP / (TP + FN), or None when TP + FN == 0.
+    - F1        = 2*TP / (2*TP + FP + FN) when both precision and recall are
+                  defined (including 0.0 when TP == 0, FP > 0, FN > 0), else None.
+    - FPR       = FP / (FP + TN), or None when FP + TN == 0.
+    """
+    if min(tp, fp, tn, fn) < 0:
+        raise ValueError("confusion matrix counts must be non-negative")
     precision = _safe_ratio(tp, tp + fp)
     recall = _safe_ratio(tp, tp + fn)
     f1: float | None = None
-    if precision is not None and recall is not None and (precision + recall) > 0:
-        f1 = round(2 * precision * recall / (precision + recall), 4)
+    if precision is not None and recall is not None:
+        f1 = _safe_ratio(2 * tp, 2 * tp + fp + fn)
     fpr = _safe_ratio(fp, fp + tn)
     return {
         "tp": tp,
@@ -91,8 +100,26 @@ def evaluate_scenario(
         prod = produced_by_id.get(event_id)
         label = str(truth["ground_truth_label"])
         is_anomaly = bool(truth["is_anomaly"])
+        expected_is_anomaly = label != EventLabel.NORMAL.value
+        if is_anomaly != expected_is_anomaly:
+            raise SummaryError(
+                f"inconsistent ground truth for {event_id}: "
+                f"label={label!r} but is_anomaly={is_anomaly}"
+            )
 
-        bucket = by_label.setdefault(label, {"total": 0, "detected": 0, "missed": 0})
+        bucket = by_label.setdefault(
+            label,
+            {
+                "is_anomaly": is_anomaly,
+                "total": 0,
+                "flagged": 0,
+                "unflagged": 0,
+                "detected": 0,
+                "missed": 0,
+                "false_positives": 0,
+                "true_negatives": 0,
+            },
+        )
         bucket["total"] += 1
 
         if det is None:
@@ -102,6 +129,10 @@ def evaluate_scenario(
         predicted = bool(det["predicted_anomaly"])
         reason = str(det["reason"])
         by_reason[reason] += 1
+        if predicted:
+            bucket["flagged"] += 1
+        else:
+            bucket["unflagged"] += 1
 
         if is_anomaly and predicted:
             tp += 1
@@ -110,9 +141,11 @@ def evaluate_scenario(
         elif not is_anomaly and predicted:
             fp += 1
             outcome = "FP"
+            bucket["false_positives"] += 1
         elif not is_anomaly and not predicted:
             tn += 1
             outcome = "TN"
+            bucket["true_negatives"] += 1
         else:
             fn += 1
             outcome = "FN"
@@ -201,8 +234,11 @@ def build_m2_report(
         "measurement_boundaries": [
             "Ground-truth labels are stored separately from Kafka payloads and never exposed "
             "to the detector.",
+            "Gradual concept drift shifts normal operating baselines and retains 'normal' "
+            "ground-truth labels (is_anomaly=false); alerts fired during pure drift are "
+            "counted as false positives (FP).",
             "Precision, recall, F1, and FPR are reported as null/unavailable when their "
-            "denominators are zero (e.g. recall in a pure-normal scenario).",
+            "denominators are zero (e.g. recall in normal or pure-drift scenarios).",
             "Detection latency is measured as "
             "(detected_monotonic_ns - enqueued_monotonic_ns) / 1e6 ms "
             "on the same host monotonic clock.",
@@ -254,14 +290,21 @@ def render_m2_markdown(report: Mapping[str, Any]) -> str:
             f"{_fmt(tp_info['detector_events_per_sec'], ' ev/s')} | {lat_str} |"
         )
 
-    lines.extend(["", "## 3. Anomaly Breakdown by Ground-Truth Label", ""])
-    lines.append("| Scenario | Label | Total | Detected | Missed |")
-    lines.append("|---|---|---:|---:|---:|")
+    lines.extend(["", "## 3. Ground-Truth Label & Anomaly Breakdown", ""])
+    lines.append(
+        "| Scenario | Label | Ground Truth | Total | Flagged (Alert) | Unflagged | Detail |"
+    )
+    lines.append("|---|---|---|---:|---:|---:|---|")
     for sc in report["scenarios"]:
         for label, counts in sorted(sc["anomaly_breakdown"].items()):
+            gt_kind = "anomaly" if counts["is_anomaly"] else "normal"
+            if counts["is_anomaly"]:
+                detail = f"TP={counts['detected']}, FN={counts['missed']}"
+            else:
+                detail = f"TN={counts['true_negatives']}, FP={counts['false_positives']}"
             lines.append(
-                f"| {sc['scenario']} | {label} | {counts['total']} | "
-                f"{counts['detected']} | {counts['missed']} |"
+                f"| {sc['scenario']} | {label} | {gt_kind} | {counts['total']} | "
+                f"{counts['flagged']} | {counts['unflagged']} | {detail} |"
             )
 
     lines.extend(["", "## 4. Measurement Boundaries", ""])

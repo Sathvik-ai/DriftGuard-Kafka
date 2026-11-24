@@ -122,6 +122,14 @@ jobs:
           data = json.loads((out / "report.json").read_text(encoding="utf-8"))
           assert len(data["scenarios"]) == 3
           assert data["overall_metrics"]["tp"] > 0
+          by_sc = {sc["scenario"]: sc for sc in data["scenarios"]}
+          # Anomalies scenario: independent spike & stuck labels
+          assert set(by_sc["anomalies"]["anomaly_breakdown"]) == {"normal", "spike", "stuck"}
+          # Drift scenario: gradual baseline shift retains normal ground truth (TP=0, FN=0, FP>0)
+          assert by_sc["drift"]["metrics"]["tp"] == 0
+          assert by_sc["drift"]["metrics"]["fn"] == 0
+          assert by_sc["drift"]["metrics"]["fp"] > 0
+          assert set(by_sc["drift"]["anomaly_breakdown"]) == {"normal"}
           for sc in data["scenarios"]:
               assert sc["alerts"]["triggered"] == sc["alerts"]["delivered"]
               assert sc["alerts"]["delivered"] == sc["alerts"]["verified_on_topic"]

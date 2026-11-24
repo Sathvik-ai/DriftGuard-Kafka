@@ -220,8 +220,9 @@ class TelemetrySimulator:
                 temp = round(_clamp(temp + 32.0 * progress, TEMPERATURE_RANGE_C), 2)
                 vib = round(_clamp(vib + 4.5 * progress, VIBRATION_RANGE_MM_S), 2)
                 press = round(_clamp(press + 3.5 * progress, PRESSURE_RANGE_BAR), 2)
-                true_label = EventLabel.DRIFT if progress >= 0.35 else EventLabel.NORMAL
-                yield self._build_event_and_truth(profile, temp, vib, press, true_label)
+                # Gradual concept drift shifts the normal operating pattern;
+                # ground truth remains NORMAL (not an injected fault/anomaly).
+                yield self._build_event_and_truth(profile, temp, vib, press, EventLabel.NORMAL)
 
     def _next_anomaly_scenario_event(
         self, profile: MachineProfile
