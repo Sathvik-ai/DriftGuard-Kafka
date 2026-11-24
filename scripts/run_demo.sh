@@ -19,7 +19,8 @@ REPORT_DIR="${PROJECT_ROOT}/reports/runs/${RUN_ID}"
 CONSUMER_GROUP="driftguard-m1-demo-${RUN_ID}"   # fresh group => reads from offset 0
 KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
 
-[[ -x "${PYTHON_BIN}" ]] || fail "Python environment not found at ${PYTHON_BIN}. Run: make setup"
+command -v "${PYTHON_BIN}" >/dev/null 2>&1 || [[ -x "${PYTHON_BIN}" ]] \
+  || fail "Python environment not found at ${PYTHON_BIN}. Run: make setup"
 require_docker
 mkdir -p "${RUN_DIR}"
 cd "${PROJECT_ROOT}"
