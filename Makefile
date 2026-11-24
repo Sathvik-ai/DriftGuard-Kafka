@@ -14,7 +14,7 @@ endif
 
 .DEFAULT_GOAL := help
 .PHONY: help setup kafka-up kafka-down kafka-clean kafka-logs kafka-verify topic-create \
-        producer consumer test coverage lint format typecheck check demo m2-demo clean
+        producer consumer test coverage lint format typecheck check demo m2-demo m3-demo clean
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -76,6 +76,9 @@ demo: ## Full M1 integration demo with PASS/FAIL result
 
 m2-demo: ## Full M2 integration demo (normal, anomalies, drift + evaluation report)
 	./scripts/run_m2_demo.sh $(if $(M2_COUNT),$(M2_COUNT),300)
+
+m3-demo: ## Full M3 integration demo (ADWIN drift monitor + report & HTML dashboard)
+	./scripts/run_m3_demo.sh $(if $(M3_COUNT),$(M3_COUNT),500)
 
 clean: ## Remove caches and run artefacts (keeps .venv and Kafka data)
 	rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage htmlcov runs

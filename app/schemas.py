@@ -215,6 +215,8 @@ class GroundTruthRecord:
     scenario: str
     ground_truth_label: EventLabel
     is_anomaly: bool
+    stream_index: int = 0
+    drift_active: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable dictionary for ground-truth JSONL logs."""
@@ -224,4 +226,6 @@ class GroundTruthRecord:
             "scenario": self.scenario,
             "ground_truth_label": self.ground_truth_label.value,
             "is_anomaly": self.is_anomaly,
+            "stream_index": self.stream_index,
+            "drift_active": self.drift_active,
         }

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
 DEFAULT_TOPIC = "research.telemetry.raw"
 DEFAULT_ALERTS_TOPIC = "research.telemetry.alerts"
+DEFAULT_DRIFT_TOPIC = "research.telemetry.drift"
 DEFAULT_CONSUMER_GROUP = "driftguard-m1-consumer"
 DEFAULT_CLIENT_ID = "driftguard-m1"
 DEFAULT_MACHINE_COUNT = 5
@@ -38,6 +39,7 @@ class Settings:
     machine_count: int
     log_level: str
     alerts_topic: str = DEFAULT_ALERTS_TOPIC
+    drift_topic: str = DEFAULT_DRIFT_TOPIC
 
 
 def _read_str(env: Mapping[str, str], name: str, default: str) -> str:
@@ -83,6 +85,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         machine_count=_read_positive_int(source, "SIMULATOR_MACHINE_COUNT", DEFAULT_MACHINE_COUNT),
         log_level=_read_log_level(source),
         alerts_topic=_read_str(source, "KAFKA_ALERTS_TOPIC", DEFAULT_ALERTS_TOPIC),
+        drift_topic=_read_str(source, "KAFKA_DRIFT_TOPIC", DEFAULT_DRIFT_TOPIC),
     )
 
 

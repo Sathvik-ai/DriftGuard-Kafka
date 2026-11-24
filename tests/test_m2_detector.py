@@ -367,6 +367,7 @@ class TestM2Report:
         }
 
         # Pure drift scenario: 0 true anomalies, 100 false-positive alerts on 300 normal events
+        # 2*TP + FP + FN = 100 > 0 -> F1 is 0.0 (unavailable only when 2*TP + FP + FN == 0)
         m_drift = compute_classification_metrics(0, 100, 200, 0)
         assert m_drift == {
             "tp": 0,
@@ -375,8 +376,21 @@ class TestM2Report:
             "fn": 0,
             "precision": 0.0,
             "recall": None,
-            "f1": None,
+            "f1": 0.0,
             "false_positive_rate": 0.3333,
+        }
+
+        # Detector predicted 0 anomalies when 10 anomalies existed -> 2*TP + FP + FN = 10 > 0
+        m_all_missed = compute_classification_metrics(0, 0, 90, 10)
+        assert m_all_missed == {
+            "tp": 0,
+            "fp": 0,
+            "tn": 90,
+            "fn": 10,
+            "precision": None,
+            "recall": 0.0,
+            "f1": 0.0,
+            "false_positive_rate": 0.0,
         }
 
         # Detector fired false alarms AND missed all true anomalies -> F1 must be 0.0, not None

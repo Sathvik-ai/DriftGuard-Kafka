@@ -139,6 +139,41 @@ jobs:
           print(f"Validated M2 report bundle in {out}")
           PY
 
+      - name: Run M3 ADWIN drift demo and validate report & dashboard
+        env:
+          PYTHON_BIN: python
+          DEMO_INTERVAL_MS: "2"
+          DEMO_SEED: "42"
+        run: |
+          ./scripts/run_m3_demo.sh 500
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+
+          m3_dirs = sorted(Path("reports/m3").iterdir())
+          assert len(m3_dirs) == 1, f"Expected 1 M3 report dir, got {m3_dirs}"
+          out = m3_dirs[0]
+          for name in ("report.md", "report.json", "channel_evaluations.csv", "dashboard.html"):
+              path = out / name
+              assert path.exists() and path.stat().st_size > 0, f"Missing/empty {path}"
+
+          data = json.loads((out / "report.json").read_text(encoding="utf-8"))
+          by_sc = {sc["scenario"]: sc for sc in data["scenarios"]}
+          assert set(by_sc) == {"normal", "drift", "abrupt_drift"}
+          assert by_sc["normal"]["drift_metrics"]["expected_drift_channels"] == 0
+          assert by_sc["normal"]["drift_metrics"]["false_alarms_stable"] == 0
+          for sc_name in ("drift", "abrupt_drift"):
+              dm = by_sc[sc_name]["drift_metrics"]
+              assert dm["expected_drift_channels"] == 15
+              assert dm["detected_drift_channels"] > 0
+              dt = by_sc[sc_name]["drift_topic"]
+              assert dt["triggered"] == dt["delivered"] == dt["verified_on_topic"]
+
+          with (out / "channel_evaluations.csv").open(encoding="utf-8") as handle:
+              assert sum(1 for _ in csv.DictReader(handle)) == 45
+          print(f"Validated M3 report & dashboard bundle in {out}")
+          PY
+
       - name: Print failure diagnostics
         if: failure()
         run: |
@@ -155,6 +190,7 @@ jobs:
             runs/
             reports/runs/
             reports/m2/
+            reports/m3/
           if-no-files-found: warn
           retention-days: 7
 

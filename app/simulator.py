@@ -51,11 +51,12 @@ def build_machine_ids(machine_count: int) -> list[str]:
 
 
 class Scenario(str, Enum):
-    """Telemetry generation scenarios supported in M1/M2."""
+    """Telemetry generation scenarios supported in M1–M3."""
 
     NORMAL = "normal"
     ANOMALIES = "anomalies"
     DRIFT = "drift"
+    ABRUPT_DRIFT = "abrupt_drift"
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,8 @@ class TelemetrySimulator:
         vib: float,
         press: float,
         true_label: EventLabel,
+        stream_index: int = 0,
+        drift_active: bool = False,
     ) -> tuple[TelemetryEvent, GroundTruthRecord]:
         event_id = str(uuid.uuid4())
         # Wire event always carries placeholder NORMAL so ground truth is never
@@ -173,6 +176,8 @@ class TelemetrySimulator:
             scenario=self._scenario.value,
             ground_truth_label=true_label,
             is_anomaly=true_label is not EventLabel.NORMAL,
+            stream_index=stream_index,
+            drift_active=drift_active,
         )
         return event, truth
 
@@ -206,14 +211,33 @@ class TelemetrySimulator:
             raise ValueError(f"count must not be negative, got {count}")
         warmup = int(count * 0.3)
         drift_span = max(1, count - warmup)
+        abrupt_onset = count // 2
 
         for index in range(count):
             profile = self._rng.choice(self._profiles)
             if self._scenario is Scenario.NORMAL:
                 temp, vib, press = self._sample_normal_readings(profile)
-                yield self._build_event_and_truth(profile, temp, vib, press, EventLabel.NORMAL)
+                yield self._build_event_and_truth(
+                    profile, temp, vib, press, EventLabel.NORMAL, stream_index=index
+                )
             elif self._scenario is Scenario.ANOMALIES:
-                yield self._next_anomaly_scenario_event(profile)
+                yield self._next_anomaly_scenario_event(profile, stream_index=index)
+            elif self._scenario is Scenario.ABRUPT_DRIFT:
+                temp, vib, press = self._sample_normal_readings(profile)
+                active = index >= abrupt_onset
+                if active:
+                    temp = round(_clamp(temp + 20.0, TEMPERATURE_RANGE_C), 2)
+                    vib = round(_clamp(vib + 3.0, VIBRATION_RANGE_MM_S), 2)
+                    press = round(_clamp(press + 2.2, PRESSURE_RANGE_BAR), 2)
+                yield self._build_event_and_truth(
+                    profile,
+                    temp,
+                    vib,
+                    press,
+                    EventLabel.NORMAL,
+                    stream_index=index,
+                    drift_active=active,
+                )
             else:
                 progress = max(0.0, (index - warmup) / drift_span)
                 temp, vib, press = self._sample_normal_readings(profile)
@@ -222,10 +246,18 @@ class TelemetrySimulator:
                 press = round(_clamp(press + 3.5 * progress, PRESSURE_RANGE_BAR), 2)
                 # Gradual concept drift shifts the normal operating pattern;
                 # ground truth remains NORMAL (not an injected fault/anomaly).
-                yield self._build_event_and_truth(profile, temp, vib, press, EventLabel.NORMAL)
+                yield self._build_event_and_truth(
+                    profile,
+                    temp,
+                    vib,
+                    press,
+                    EventLabel.NORMAL,
+                    stream_index=index,
+                    drift_active=index > warmup,
+                )
 
     def _next_anomaly_scenario_event(
-        self, profile: MachineProfile
+        self, profile: MachineProfile, stream_index: int = 0
     ) -> tuple[TelemetryEvent, GroundTruthRecord]:
         stuck = self._stuck_state.get(profile.machine_id)
         if stuck is not None:
@@ -234,13 +266,19 @@ class TelemetrySimulator:
                 self._stuck_state[profile.machine_id] = (remaining - 1, frozen)
             else:
                 del self._stuck_state[profile.machine_id]
-            return self._build_event_and_truth(profile, *frozen, EventLabel.STUCK)
+            return self._build_event_and_truth(
+                profile, *frozen, EventLabel.STUCK, stream_index=stream_index
+            )
 
         temp, vib, press = self._sample_normal_readings(profile)
         if self._rng.random() < self._anomaly_rate:
             if self._rng.random() < 0.5:
                 spiked = self._apply_spike(temp, vib, press)
-                return self._build_event_and_truth(profile, *spiked, EventLabel.SPIKE)
+                return self._build_event_and_truth(
+                    profile, *spiked, EventLabel.SPIKE, stream_index=stream_index
+                )
             # Freeze this reading for the next 5 events of this machine.
             self._stuck_state[profile.machine_id] = (5, (temp, vib, press))
-        return self._build_event_and_truth(profile, temp, vib, press, EventLabel.NORMAL)
+        return self._build_event_and_truth(
+            profile, temp, vib, press, EventLabel.NORMAL, stream_index=stream_index
+        )

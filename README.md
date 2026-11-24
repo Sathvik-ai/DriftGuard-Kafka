@@ -186,7 +186,21 @@ M2 extends the pipeline with three reproducible telemetry scenarios (`normal`, `
   ```bash
   make m2-demo
   ```
-- **Evaluation report**: Saved under `reports/m2/<run_id>/` (`report.md`, `report.json`, `evaluations.csv`) with confusion matrix (`TP/FP/TN/FN`), precision, recall, F1, false-positive rate, anomaly breakdown, throughput, and latency.
+- **Evaluation report**: Saved under `reports/m2/<run_id>/` (`report.md`, `report.json`, `evaluations.csv`) with confusion matrix (`TP/FP/TN/FN`), precision, recall, F1 (`2TP/(2TP+FP+FN)` whenever `2TP+FP+FN > 0`), false-positive rate, anomaly breakdown, throughput, and latency.
+
+---
+
+## 11. Milestone 3 (M3): ADWIN Concept Drift Monitoring & Interactive Dashboard
+
+M3 adds online concept drift detection using **River ADWIN** (`river==0.27.0`) in `app/drift_monitor.py`:
+
+- **Per-(machine, feature) isolation**: Maintains independent `ADWIN` monitors for `temperature_c`, `vibration_mm_s`, and `pressure_bar` scoped by `machine_id`, consuming unlabelled telemetry from `research.telemetry.raw` and publishing structured drift events to `research.telemetry.drift`.
+- **Scenarios**: Evaluates `normal` (stationary), `drift` (gradual baseline ramp), and `abrupt_drift` (step baseline shift). All drifted observations retain `normal` ground-truth labels, and static M2 anomaly thresholds remain unchanged (no adaptive threshold updates yet).
+- **Run M3 end-to-end**:
+  ```bash
+  make m3-demo
+  ```
+- **Reports & Streaming Dashboard**: Saved under `reports/m3/<run_id>/` (`report.md`, `report.json`, `channel_evaluations.csv`, and interactive `dashboard.html` plotting per-machine streaming points, static threshold bands, drift onset boundaries, and ADWIN detections).
 
 ---
 

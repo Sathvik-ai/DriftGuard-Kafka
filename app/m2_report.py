@@ -43,17 +43,14 @@ def compute_classification_metrics(
 
     - Precision = TP / (TP + FP), or None when TP + FP == 0.
     - Recall    = TP / (TP + FN), or None when TP + FN == 0.
-    - F1        = 2*TP / (2*TP + FP + FN) when both precision and recall are
-                  defined (including 0.0 when TP == 0, FP > 0, FN > 0), else None.
+    - F1        = 2*TP / (2*TP + FP + FN), or None only when 2*TP + FP + FN == 0.
     - FPR       = FP / (FP + TN), or None when FP + TN == 0.
     """
     if min(tp, fp, tn, fn) < 0:
         raise ValueError("confusion matrix counts must be non-negative")
     precision = _safe_ratio(tp, tp + fp)
     recall = _safe_ratio(tp, tp + fn)
-    f1: float | None = None
-    if precision is not None and recall is not None:
-        f1 = _safe_ratio(2 * tp, 2 * tp + fp + fn)
+    f1 = _safe_ratio(2 * tp, 2 * tp + fp + fn)
     fpr = _safe_ratio(fp, fp + tn)
     return {
         "tp": tp,
