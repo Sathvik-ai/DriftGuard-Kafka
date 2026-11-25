@@ -204,6 +204,34 @@ M3 adds online concept drift detection using **River ADWIN** (`river==0.27.0`) i
 - **Reports & Streaming Dashboard**:
   - Single-run bundle under `reports/m3/<run_id>/` (`report.md`, `report.json`, `channel_evaluations.csv`, and `dashboard.html`), distinguishing `first_episode_detections` from `repeated_episode_alerts` during continuous gradual ramps.
   - Multi-seed robustness bundle under `reports/m3/robustness_<run_id>/` (`robustness_report.md`, `robustness_report.json`, `seed_runs.csv`) reporting `mean ± std [min, max]` across 10 seeds.
+  - Live real-time streaming dashboard (`http://127.0.0.1:8765`) streaming over Apache Kafka via Server-Sent Events with animated threshold alerts and ADWIN drift cuts:
+    ```bash
+    make dashboard
+    ```
+
+---
+
+## 12. Milestone 4 (M4): Comparative ML Benchmarking
+
+M4 benchmarks three unsupervised anomaly detectors (`app/m4_models.py`, `app/m4_benchmark.py`, `app/datasets.py`) across **SKAB** and **TSB-AD-M** while keeping ADWIN completely independent (no adaptive retraining yet):
+
+- **Models Compared**:
+  1. `static_threshold` (`StaticThresholdBaseline`): Multivariate static operating bounds + consecutive stuck-sensor check preserving the M2 baseline design.
+  2. `isolation_forest` (`IsolationForestDetector`): Scikit-learn `IsolationForest` with `StandardScaler` fit strictly on normal training observations.
+  3. `half_space_trees` (`HalfSpaceTreesDetector`): River online `HalfSpaceTrees` with `MinMaxScaler`, guaranteed reference-window warm-up on normal training data, and strict `score_one` before `learn_one` evaluation.
+- **Datasets & Leakage-Free Protocol**:
+  - **SKAB (`waico/SKAB` v0.9)**: Full ingestion of all 35 semicolon-delimited CSVs (`valve1`, `valve2`, `other`, `anomaly-free`), preserving `anomaly` and `changepoint` labels separately and filtering chronological training prefixes strictly to `anomaly == 0`.
+  - **TSB-AD-M (`TheDatumOrg/TSB-AD`)**: Official `_tr_<train_end>` chronological split adapter filtered strictly to normal training observations (`Label == 0`), calibrating thresholds on held-out chronological normal validation slices (`calibration_quantile=0.99`), and evaluating official `VUS-PR` via `TSB_AD.evaluation.metrics.get_metrics` (`tsb-ad==1.5`).
+  - External datasets live in git-ignored `data/external/` and are never committed.
+- **Run M4 Benchmark**:
+  ```bash
+  # Domain-stratified across all 17 TSB-AD-M domains (2 per domain) + full SKAB (35 CSVs):
+  make m4-benchmark
+  # Or evaluate all 180 official TSB-AD-M-Eva series + full SKAB:
+  make m4-benchmark TSB_MAX_PER_DOMAIN=0
+  ```
+- **Reproducible Outputs (`reports/m4/<run_id>/`)**:
+  - `comparison_summary.csv`, `per_experiment_metrics.csv`, `benchmark_report.json`, and `benchmark_report.md` (recording Precision, Recall, F1, FPR, PR-AUC, VUS-PR, inference latency, throughput, CPU time, peak memory, SHA-256 dataset provenance, model parameters, and seeds).
 
 ---
 

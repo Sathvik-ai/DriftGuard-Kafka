@@ -15,7 +15,7 @@ endif
 .DEFAULT_GOAL := help
 .PHONY: help setup kafka-up kafka-down kafka-clean kafka-logs kafka-verify topic-create \
         producer consumer test coverage lint format typecheck check demo m2-demo m3-demo \
-        m3-robustness clean
+        m3-robustness m4-benchmark dashboard clean
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -23,12 +23,15 @@ help: ## Show available commands
 
 setup: ## Create .venv (Python >= 3.10) and install dependencies
 	@if command -v uv >/dev/null 2>&1; then \
-	  uv venv --python 3.11 $(VENV) && uv pip install --python $(PY) -r requirements-dev.txt; \
+	  uv venv --python 3.11 $(VENV) && \
+	  uv pip install --python $(PY) -r requirements-dev.txt && \
+	  uv pip install --no-deps --python $(PY) -r requirements-tsb-ad.txt; \
 	else \
 	  python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' \
 	    || { echo "Python >= 3.10 required (try: brew install python@3.11)"; exit 1; }; \
 	  python3 -m venv $(VENV) && $(PY) -m pip install --upgrade pip && \
-	  $(PY) -m pip install -r requirements-dev.txt; \
+	  $(PY) -m pip install -r requirements-dev.txt && \
+	  $(PY) -m pip install --no-deps -r requirements-tsb-ad.txt; \
 	fi
 	@test -f .env || cp .env.example .env
 	@$(PY) --version
@@ -83,6 +86,12 @@ m3-demo: ## Full M3 integration demo (ADWIN drift monitor + report & HTML dashbo
 
 m3-robustness: ## Run 10-seed M3 robustness sweep over Kafka (normal, drift, abrupt_drift)
 	./scripts/run_m3_robustness.sh $(if $(M3_COUNT),$(M3_COUNT),500)
+
+m4-benchmark: ## Run M4 comparative ML benchmark on SKAB and TSB-AD-M
+	./scripts/run_m4_benchmark.sh $(if $(TSB_MAX_PER_DOMAIN),$(TSB_MAX_PER_DOMAIN),2)
+
+dashboard: ## Launch live real-time streaming dashboard at http://127.0.0.1:8765
+	$(PY) -m app.live_dashboard --port 8765
 
 clean: ## Remove caches and run artefacts (keeps .venv and Kafka data)
 	rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage htmlcov runs

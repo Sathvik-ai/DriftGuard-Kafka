@@ -1,12 +1,8 @@
-"""Interactive HTML report dashboard for DriftGuard-Kafka M3 streaming runs.
+"""Interactive animated HTML dashboard for DriftGuard-Kafka streaming reports.
 
-Generates a self-contained `dashboard.html` inside `reports/m3/<run_id>/` that
-plots actual Kafka-consumed telemetry points (`temperature_c`, `vibration_mm_s`,
-`pressure_bar`) per scenario and machine, overlaid with:
-  - Static M2 anomaly threshold bands (unchanged in M3)
-  - Ground-truth drift onset boundary (for verification only)
-  - River ADWIN concept drift detection markers
-  - Interactive streaming point inspector table
+Generates a clean, plain-English `dashboard.html` that actively streams and
+animates telemetry points across the chart in real time, highlighting threshold
+alerts and ADWIN concept-drift detections as they happen.
 """
 
 from __future__ import annotations
@@ -24,238 +20,299 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DriftGuard-Kafka M3 Streaming Dashboard — __RUN_ID__</title>
+  <title>DriftGuard-Kafka Live Replay — __RUN_ID__</title>
   <style>
     :root {
-      --bg: #0f172a; --card: #1e293b; --border: #334155;
-      --fg: #f8fafc; --muted: #94a3b8; --accent: #38bdf8;
-      --ok: #22c55e; --warn: #f59e0b; --err: #ef4444; --drift: #a855f7;
+      --bg: #0b1120; --panel: #131c31; --border: #24324d;
+      --text: #f1f5f9; --muted: #94a3b8; --blue: #38bdf8;
+      --green: #22c55e; --amber: #f59e0b; --red: #ef4444; --purple: #c084fc;
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0; padding: 20px; background: var(--bg); color: var(--fg);
+      margin: 0; padding: 20px; background: var(--bg); color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 14px; line-height: 1.45;
     }
-    .wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 16px; }
+    .shell { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
+    .bar {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px 18px; display: flex; flex-wrap: wrap; gap: 12px;
+      align-items: center; justify-content: space-between;
+    }
+    .title { font-size: 18px; font-weight: 700; }
+    .subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    button, select {
+      background: #0f172a; color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    button:hover { border-color: var(--blue); }
+    button.active {
+      background: rgba(56, 189, 248, 0.16); border-color: var(--blue);
+      color: var(--blue); font-weight: 600;
+    }
+    button.play-btn {
+      background: #0284c7; border-color: #38bdf8; color: #fff; font-weight: 600;
+    }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
     .card {
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: 16px;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px;
     }
-    h1 { margin: 0 0 4px; font-size: 20px; }
-    h2 { margin: 0 0 12px; font-size: 15px; color: var(--fg); }
-    .sub { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
-    .kpis {
-      display: grid; gap: 12px;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-    }
-    .kpi {
-      background: rgba(15,23,42,0.55); border: 1px solid var(--border);
-      border-radius: 8px; padding: 12px;
-    }
-    .kpi .lbl { color: var(--muted); font-size: 12px; }
-    .kpi .val {
-      font-size: 22px; font-weight: 700; margin-top: 4px;
+    .card-lbl { font-size: 12px; color: var(--muted); }
+    .card-val {
+      font-size: 26px; font-weight: 700; margin-top: 4px;
       font-variant-numeric: tabular-nums;
     }
-    .controls {
-      display: flex; flex-wrap: wrap; gap: 12px;
-      align-items: center; margin-bottom: 12px;
+    .main-grid { display: grid; grid-template-columns: 1fr 310px; gap: 16px; }
+    @media (max-width: 920px) {
+      .cards { grid-template-columns: repeat(2, 1fr); }
+      .main-grid { grid-template-columns: 1fr; }
     }
-    select, button {
-      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
-      border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer;
-    }
-    button.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
     canvas {
-      width: 100%; height: 320px; display: block;
-      background: rgba(15,23,42,0.45); border-radius: 8px;
+      width: 100%; height: 360px; display: block;
+      background: #090f1d; border-radius: 10px; border: 1px solid var(--border);
     }
     .legend {
-      display: flex; flex-wrap: wrap; gap: 16px;
-      margin-top: 10px; font-size: 12px; color: var(--muted);
+      display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px;
+      font-size: 12px; color: var(--muted);
     }
     .dot {
       display: inline-block; width: 10px; height: 10px;
-      border-radius: 50%; margin-right: 5px; vertical-align: middle;
+      border-radius: 50%; margin-right: 6px; vertical-align: middle;
     }
-    table {
-      width: 100%; border-collapse: collapse;
-      font-size: 12px; font-variant-numeric: tabular-nums;
+    .feed {
+      height: 360px; overflow-y: auto; display: flex;
+      flex-direction: column; gap: 8px; padding-right: 4px;
     }
-    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
-    th { color: var(--muted); font-weight: 600; }
-    .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-    .b-ok { background: rgba(34,197,94,0.18); color: #4ade80; }
-    .b-drift { background: rgba(168,85,247,0.22); color: #c084fc; }
-    .b-warn { background: rgba(245,158,11,0.2); color: #fbbf24; }
-    .scroll { max-height: 260px; overflow-y: auto; }
+    .ev-item {
+      background: #0f172a; border-left: 3px solid var(--purple);
+      border-radius: 6px; padding: 8px 10px; font-size: 12px;
+    }
+    .ev-item.warn { border-left-color: var(--amber); }
+    .ev-head { font-weight: 600; display: flex; justify-content: space-between; }
+    .ev-sub { color: var(--muted); margin-top: 2px; font-family: ui-monospace, monospace; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <h1>DriftGuard-Kafka M3 — ADWIN Streaming Telemetry &amp; Drift Dashboard</h1>
-      <div class="sub" id="meta"></div>
-    </div>
-
-    <div class="kpis" id="kpis"></div>
-
-    <div class="card">
-      <div class="controls">
-        <label>Scenario: <select id="scenarioSelect"></select></label>
-        <label>Machine: <select id="machineSelect"></select></label>
-        <div id="featureBtns"></div>
-        <span class="sub" id="hoverInfo" style="margin-left:auto">
-          Hover chart to inspect point
-        </span>
+  <div class="shell">
+    <div class="bar">
+      <div>
+        <div class="title">DriftGuard-Kafka — Live Telemetry &amp; Drift Visualizer</div>
+        <div class="subtitle" id="statusText">Streaming Run __RUN_ID__</div>
       </div>
-      <canvas id="streamCanvas" width="1180" height="320"></canvas>
-      <div class="legend">
-        <span><span class="dot" style="background:#38bdf8"></span>Streaming point</span>
-        <span><span class="dot" style="background:#f59e0b"></span>Static M2 alert</span>
-        <span><span class="dot" style="background:#ef4444"></span>Static bounds</span>
-        <span><span class="dot" style="background:#22c55e"></span>True drift onset</span>
-        <span><span class="dot" style="background:#a855f7"></span>ADWIN drift detected</span>
+      <div class="pills">
+        <button id="playBtn" class="play-btn">Pause</button>
+        <button id="restartBtn">Replay</button>
+        <select id="speedSel" title="Playback speed">
+          <option value="80">1x Speed</option>
+          <option value="30" selected>3x Speed</option>
+          <option value="8">10x Fast</option>
+        </select>
       </div>
     </div>
 
-    <div class="card">
-      <h2>Scenario Summary &amp; Channel Drift Metrics</h2>
-      <div class="scroll"><table id="scenarioTable"></table></div>
+    <div class="bar">
+      <div class="pills" id="scenarioPills"></div>
+      <div class="pills">
+        <select id="sensorSel">
+          <option value="temperature_c">Temperature (°C)</option>
+          <option value="vibration_mm_s">Vibration (mm/s)</option>
+          <option value="pressure_bar">Pressure (bar)</option>
+        </select>
+        <select id="machineSel"></select>
+      </div>
     </div>
 
-    <div class="card">
-      <h2>Streaming Points &amp; ADWIN Events Inspector (Selected Scenario &amp; Machine)</h2>
-      <div class="scroll"><table id="pointsTable"></table></div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-lbl">Live Reading</div>
+        <div class="card-val" id="liveVal" style="color:var(--blue)">—</div>
+      </div>
+      <div class="card">
+        <div class="card-lbl">Points Streamed</div>
+        <div class="card-val" id="ptsVal">0 / 0</div>
+      </div>
+      <div class="card">
+        <div class="card-lbl">ADWIN Drift Cuts Marked</div>
+        <div class="card-val" id="driftVal" style="color:var(--purple)">0</div>
+      </div>
+      <div class="card">
+        <div class="card-lbl">Static Threshold Alerts</div>
+        <div class="card-val" id="alertVal" style="color:var(--amber)">0</div>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <div class="card">
+        <canvas id="streamCanvas" width="820" height="360"></canvas>
+        <div class="legend">
+          <span><span class="dot" style="background:var(--blue)"></span>Normal Sensor Stream</span>
+          <span>
+            <span class="dot" style="background:var(--amber)"></span>Static Threshold Alert
+          </span>
+          <span>
+            <span class="dot" style="background:var(--purple)"></span>ADWIN Drift Detected
+          </span>
+          <span><span class="dot" style="background:var(--green)"></span>True Drift Start</span>
+          <span><span class="dot" style="background:var(--red)"></span>Safe Limits</span>
+        </div>
+      </div>
+      <div class="card">
+        <div style="font-weight:600;margin-bottom:10px;font-size:14px">
+          Active Event Log
+        </div>
+        <div class="feed" id="eventFeed"></div>
+      </div>
     </div>
   </div>
 
   <script>
     const DATA = __DASHBOARD_JSON__;
-    const TH = DATA.thresholds;
-    const FEATURES = [
-      { key: "temperature_c", label: "Temperature (°C)", min: TH.temp_min_c, max: TH.temp_max_c },
-      {
-        key: "vibration_mm_s", label: "Vibration (mm/s)",
-        min: TH.vib_min_mm_s, max: TH.vib_max_mm_s
+    const LABELS = {
+      normal: "Normal Operation",
+      drift: "Gradual Drift",
+      abrupt_drift: "Abrupt Drift",
+      anomalies: "Injected Faults"
+    };
+    const SENSORS = {
+      temperature_c: {
+        unit: "°C", min: DATA.thresholds.temp_min_c, max: DATA.thresholds.temp_max_c
       },
-      { key: "pressure_bar", label: "Pressure (bar)", min: TH.press_min_bar, max: TH.press_max_bar }
-    ];
-    const defaultSc = DATA.report.scenarios[1]
-      ? DATA.report.scenarios[1].scenario
-      : DATA.report.scenarios[0].scenario;
-    let state = { scenario: defaultSc, machine: "machine_01", feature: "temperature_c" };
+      vibration_mm_s: {
+        unit: "mm/s", min: DATA.thresholds.vib_min_mm_s, max: DATA.thresholds.vib_max_mm_s
+      },
+      pressure_bar: {
+        unit: "bar", min: DATA.thresholds.press_min_bar, max: DATA.thresholds.press_max_bar
+      }
+    };
 
-    function fmt(v, s = "") { return v === null || v === undefined ? "unavailable" : v + s; }
+    const scenarios = DATA.report.scenarios.map(s => s.scenario);
+    let sc = scenarios.includes("drift") ? "drift" : scenarios[0];
+    let machine = "machine_01", sensor = "temperature_c";
+    let cursor = 0, playing = true, timer = null, pulses = [];
 
-    function init() {
-      const r = DATA.report;
-      document.getElementById("meta").textContent =
-        "Run ID: " + r.run_id + " | Generated: " + r.generated_utc +
-        " | ADWIN delta: " + r.adwin_delta + " | Seed: " + fmt(r.reproducibility.seed);
+    function series() {
+      return (DATA.streams[sc] || []).filter(p => p.machine_id === machine);
+    }
 
-      const ov = r.overall_metrics;
-      const pct = ov.detection_rate !== null ? (ov.detection_rate * 100).toFixed(1) : null;
-      const kpis = [
-        ["Expected Drift Channels", ov.expected_drift_channels],
-        ["Detected Drift Channels", ov.detected_drift_channels + " (" + fmt(pct, "%") + ")"],
-        ["Missed Drift Channels", ov.missed_drift_channels],
-        ["Stable False Alarms", ov.false_alarms_stable],
-        ["Mean Delay (Samples)", fmt(ov.mean_delay_machine_samples, " samples")],
-        [
-          "Kafka Drift Verified",
-          ov.total_drift_events_verified + " / " + ov.total_drift_events_triggered
-        ]
-      ];
-      document.getElementById("kpis").innerHTML = kpis.map(([l, v]) =>
-        '<div class="kpi"><div class="lbl">' + l + '</div><div class="val">' + v + '</div></div>'
-      ).join("");
-
-      const scSel = document.getElementById("scenarioSelect");
-      scSel.innerHTML = r.scenarios.map(
-        s => '<option value="' + s.scenario + '">' + s.scenario + '</option>'
-      ).join("");
-      scSel.value = state.scenario;
-      scSel.onchange = () => { state.scenario = scSel.value; syncMachines(); render(); };
-
-      const fBtns = document.getElementById("featureBtns");
-      fBtns.innerHTML = FEATURES.map(f => {
-        const cls = f.key === state.feature ? "active" : "";
-        return '<button data-f="' + f.key + '" class="' + cls + '">' + f.label + '</button>';
-      }).join(" ");
-      fBtns.querySelectorAll("button").forEach(btn => {
-        btn.onclick = () => {
-          state.feature = btn.dataset.f;
-          fBtns.querySelectorAll("button").forEach(
-            b => b.classList.toggle("active", b.dataset.f === state.feature)
+    function setupUI() {
+      const box = document.getElementById("scenarioPills");
+      box.innerHTML = scenarios.map(s => {
+        const cls = s === sc ? "active" : "";
+        return '<button data-s="' + s + '" class="' + cls + '">' +
+          (LABELS[s] || s) + '</button>';
+      }).join("");
+      box.querySelectorAll("button").forEach(b => {
+        b.onclick = () => {
+          sc = b.dataset.s;
+          box.querySelectorAll("button").forEach(
+            x => x.classList.toggle("active", x.dataset.s === sc)
           );
-          render();
+          syncMachines();
+          resetStream();
         };
       });
 
-      renderScenarioTable();
+      document.getElementById("sensorSel").onchange = (e) => {
+        sensor = e.target.value;
+        drawFrame();
+      };
+      document.getElementById("playBtn").onclick = () => {
+        playing = !playing;
+        document.getElementById("playBtn").textContent = playing ? "Pause" : "Play Stream";
+      };
+      document.getElementById("restartBtn").onclick = resetStream;
+      document.getElementById("speedSel").onchange = startLoop;
+
       syncMachines();
-      render();
+      resetStream();
+      startLoop();
+      requestAnimationFrame(animatePulses);
     }
 
     function syncMachines() {
-      const pts = DATA.streams[state.scenario] || [];
-      const machines = [...new Set(pts.map(p => p.machine_id))].sort();
-      const mSel = document.getElementById("machineSelect");
-      if (!machines.includes(state.machine) && machines.length) state.machine = machines[0];
-      mSel.innerHTML = machines.map(m => '<option value="' + m + '">' + m + '</option>').join("");
-      mSel.value = state.machine;
-      mSel.onchange = () => { state.machine = mSel.value; render(); };
+      const pts = DATA.streams[sc] || [];
+      const ms = [...new Set(pts.map(p => p.machine_id))].sort();
+      if (!ms.includes(machine) && ms.length) machine = ms[0];
+      const sel = document.getElementById("machineSel");
+      sel.innerHTML = ms.map(m => '<option value="' + m + '">' + m + '</option>').join("");
+      sel.value = machine;
+      sel.onchange = () => { machine = sel.value; resetStream(); };
     }
 
-    function renderScenarioTable() {
-      const rows = DATA.report.scenarios.map(s => {
-        const dm = s.drift_metrics;
-        const dly = s.delay_machine_samples;
-        const dt = s.drift_topic;
-        const dtStr = dt.triggered + " / " + dt.delivered + " / " + fmt(dt.verified_on_topic);
-        return "<tr>" +
-          "<td><strong>" + s.scenario + "</strong></td>" +
-          "<td>" + s.events.received + "</td>" +
-          "<td>" + dm.expected_drift_channels + "</td>" +
-          "<td>" + dm.detected_drift_channels + "</td>" +
-          "<td>" + dm.missed_drift_channels + "</td>" +
-          "<td>" + fmt(dm.detection_rate) + "</td>" +
-          "<td>" + dm.false_alarms_stable + "</td>" +
-          "<td>" + fmt(dly.mean) + " / " + fmt(dly.p50) + " / " + fmt(dly.p95) + "</td>" +
-          "<td>" + s.events.static_alerts_observed + "</td>" +
-          "<td>" + dtStr + "</td></tr>";
-      }).join("");
-      document.getElementById("scenarioTable").innerHTML = "<thead><tr>" +
-        "<th>Scenario</th><th>Events</th><th>Expected Ch</th>" +
-        "<th>Detected Ch</th><th>Missed Ch</th>" +
-        "<th>Detection Rate</th><th>Stable False Alarms</th><th>Delay Mean/p50/p95</th>" +
-        "<th>Unchanged Static Alerts</th><th>Kafka Drift (Trig/Del/Ver)</th>" +
-        "</tr></thead><tbody>" + rows + "</tbody>";
+    function resetStream() {
+      cursor = 0; pulses = []; playing = true;
+      document.getElementById("playBtn").textContent = "Pause";
+      document.getElementById("eventFeed").innerHTML = "";
+      drawFrame();
     }
 
-    let currentPlotPoints = [];
+    function startLoop() {
+      if (timer) clearInterval(timer);
+      const ms = Number(document.getElementById("speedSel").value);
+      timer = setInterval(() => {
+        if (!playing) return;
+        const pts = series();
+        if (cursor < pts.length) {
+          const pt = pts[cursor];
+          cursor++;
+          checkEvents(pt, cursor - 1);
+          drawFrame();
+        } else {
+          playing = false;
+          document.getElementById("playBtn").textContent = "Play Stream";
+        }
+      }, ms);
+    }
 
-    function render() {
-      const rawPts = DATA.streams[state.scenario] || [];
-      const allPts = rawPts.filter(p => p.machine_id === state.machine);
-      const featCfg = FEATURES.find(f => f.key === state.feature);
+    function checkEvents(pt, idx) {
+      const feed = document.getElementById("eventFeed");
+      const drifts = pt.drift_features || [];
+      if (drifts.length > 0) {
+        pulses.push({ idx, color: "#c084fc", born: performance.now() });
+        const div = document.createElement("div");
+        div.className = "ev-item";
+        div.innerHTML = '<div class="ev-head"><span style="color:#c084fc">ADWIN Drift Cut</span>' +
+          '<span>#' + pt.machine_position + '</span></div>' +
+          '<div class="ev-sub">' + drifts.join(", ") + ' shifted</div>';
+        feed.prepend(div);
+      } else if (pt.static_alert) {
+        pulses.push({ idx, color: "#f59e0b", born: performance.now() });
+        const div = document.createElement("div");
+        div.className = "ev-item warn";
+        div.innerHTML = '<div class="ev-head"><span style="color:#f59e0b">Threshold Alert</span>' +
+          '<span>#' + pt.machine_position + '</span></div>' +
+          '<div class="ev-sub">Temp=' + pt.temperature_c + '°C Vib=' +
+          pt.vibration_mm_s + '</div>';
+        feed.prepend(div);
+      }
+    }
+
+    function animatePulses() {
+      if (pulses.length > 0) drawFrame();
+      requestAnimationFrame(animatePulses);
+    }
+
+    function drawFrame() {
+      const pts = series();
+      const visible = pts.slice(0, cursor);
+      const cfg = SENSORS[sensor];
       const canvas = document.getElementById("streamCanvas");
       const ctx = canvas.getContext("2d");
       const W = canvas.width, H = canvas.height;
-      const pad = { l: 52, r: 20, t: 20, b: 32 };
+      const pad = { l: 48, r: 20, t: 22, b: 28 };
       ctx.clearRect(0, 0, W, H);
 
-      if (!allPts.length) return;
-      const vals = allPts.map(p => p[state.feature]);
-      const yMin = Math.min(...vals, featCfg.min) - 2;
-      const yMax = Math.max(...vals, featCfg.max) + 2;
-      const xOf = (i) => pad.l + (i / Math.max(1, allPts.length - 1)) * (W - pad.l - pad.r);
-      const span = Math.max(1e-6, yMax - yMin);
-      const yOf = (v) => H - pad.b - ((v - yMin) / span) * (H - pad.t - pad.b);
+      if (!pts.length) return;
+      const allVals = pts.map(p => p[sensor]);
+      const yMin = Math.min(...allVals, cfg.min) - 2.5;
+      const yMax = Math.max(...allVals, cfg.max) + 2.5;
+      const xOf = (i) => pad.l + (i / Math.max(1, pts.length - 1)) * (W - pad.l - pad.r);
+      const ySpan = Math.max(1e-6, yMax - yMin);
+      const yOf = (v) => H - pad.b - ((v - yMin) / ySpan) * (H - pad.t - pad.b);
 
-      ctx.strokeStyle = "#334155"; ctx.lineWidth = 1;
+      ctx.strokeStyle = "#1e293b"; ctx.lineWidth = 1;
       ctx.fillStyle = "#94a3b8"; ctx.font = "11px monospace";
       for (let g = 0; g <= 4; g++) {
         const v = yMin + (g / 4) * (yMax - yMin);
@@ -265,94 +322,82 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       }
 
       ctx.save();
-      ctx.strokeStyle = "#ef4444"; ctx.setLineDash([5, 4]);
-      [featCfg.min, featCfg.max].forEach(th => {
+      ctx.strokeStyle = "#ef4444"; ctx.setLineDash([6, 4]);
+      [cfg.min, cfg.max].forEach(th => {
         const y = yOf(th);
         ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
       });
       ctx.restore();
 
-      const onsetIdx = allPts.findIndex(p => p.drift_active);
-      if (onsetIdx >= 0) {
-        const x = xOf(onsetIdx);
+      const onset = pts.findIndex(p => p.drift_active);
+      if (onset >= 0 && cursor > onset) {
+        const x = xOf(onset);
         ctx.save();
         ctx.strokeStyle = "#22c55e"; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
         ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke();
         ctx.fillStyle = "#4ade80";
-        ctx.fillText("onset #" + onsetIdx, Math.min(x + 4, W - 90), pad.t + 12);
+        ctx.fillText("True Drift Start", Math.min(x + 5, W - 110), pad.t + 12);
         ctx.restore();
       }
 
-      ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      allPts.forEach((p, i) => {
-        const x = xOf(i), y = yOf(p[state.feature]);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
+      if (visible.length > 0) {
+        ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = 2;
+        ctx.beginPath();
+        visible.forEach((p, i) => {
+          const x = xOf(i), y = yOf(p[sensor]);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
 
-      currentPlotPoints = [];
-      allPts.forEach((p, i) => {
-        const x = xOf(i), y = yOf(p[state.feature]);
-        const v = p[state.feature];
-        const breach = v < featCfg.min || v > featCfg.max;
-        const drifted = (p.drift_features || []).includes(state.feature);
-        currentPlotPoints.push({ x, y, p, i });
+        let driftCnt = 0, alertCnt = 0;
+        visible.forEach((p, i) => {
+          const x = xOf(i), y = yOf(p[sensor]);
+          const v = p[sensor];
+          const isDrift = (p.drift_features || []).includes(sensor);
+          const isAlert = v < cfg.min || v > cfg.max;
+          if ((p.drift_features || []).length > 0) driftCnt++;
+          if (p.static_alert) alertCnt++;
 
-        if (drifted) {
-          ctx.strokeStyle = "#a855f7"; ctx.lineWidth = 2;
-          ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke();
-          ctx.fillStyle = "#c084fc";
-          ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.fill();
-        } else {
-          ctx.fillStyle = breach ? "#f59e0b" : "#38bdf8";
-          ctx.beginPath(); ctx.arc(x, y, breach ? 3.5 : 2.3, 0, Math.PI * 2); ctx.fill();
-        }
-      });
+          if (isDrift) {
+            ctx.strokeStyle = "#c084fc"; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke();
+            ctx.fillStyle = "#c084fc";
+            ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill();
+          } else if (isAlert) {
+            ctx.fillStyle = "#f59e0b";
+            ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+          } else if (i === visible.length - 1) {
+            ctx.fillStyle = "#38bdf8";
+            ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
+          }
+        });
 
-      canvas.onmousemove = (ev) => {
-        const rect = canvas.getBoundingClientRect();
-        const mx = (ev.clientX - rect.left) * (W / rect.width);
-        let best = null, bestDist = 1e9;
-        for (const item of currentPlotPoints) {
-          const d = Math.abs(item.x - mx);
-          if (d < bestDist) { bestDist = d; best = item; }
-        }
-        if (best) {
-          const p = best.p;
-          const adw = (p.drift_features || []).join(",") || "none";
-          document.getElementById("hoverInfo").textContent =
-            "machine_pos=" + p.machine_position + " | stream_pos=" + p.stream_position +
-            " | " + state.feature + "=" + p[state.feature] +
-            " | gt=" + p.ground_truth_label + " | drift=" + p.drift_active + " | adwin=" + adw;
-        }
-      };
+        const now = performance.now();
+        pulses = pulses.filter(pl => now - pl.born < 900);
+        pulses.forEach(pl => {
+          if (pl.idx < visible.length) {
+            const age = (now - pl.born) / 900;
+            const x = xOf(pl.idx), y = yOf(visible[pl.idx][sensor]);
+            ctx.save();
+            ctx.strokeStyle = pl.color;
+            ctx.globalAlpha = 1 - age;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(x, y, 6 + age * 22, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        });
 
-      const interesting = allPts.filter((p, idx) =>
-        (p.drift_features && p.drift_features.length > 0) || idx % 5 === 0
-      );
-      const bodyRows = interesting.map(p => {
-        const reg = p.drift_active
-          ? '<span class="badge b-warn">drifted normal</span>'
-          : "baseline normal";
-        const al = p.static_alert ? '<span class="badge b-warn">alert (FP)</span>' : "—";
-        const df = (p.drift_features || []).length
-          ? '<span class="badge b-drift">' + p.drift_features.join(", ") + "</span>"
-          : "—";
-        return "<tr><td>" + p.machine_position + "</td><td>" + p.stream_position + "</td>" +
-          "<td>" + p.temperature_c + "</td><td>" + p.vibration_mm_s + "</td>" +
-          "<td>" + p.pressure_bar + "</td>" +
-          '<td><span class="badge b-ok">' + p.ground_truth_label + "</span></td>" +
-          "<td>" + reg + "</td><td>" + al + "</td><td>" + df + "</td></tr>";
-      }).join("");
-      document.getElementById("pointsTable").innerHTML = "<thead><tr>" +
-        "<th>Machine Pos</th><th>Stream Pos</th><th>Temp (°C)</th>" +
-        "<th>Vib (mm/s)</th><th>Press (bar)</th>" +
-        "<th>GT Label</th><th>Drift Regime</th><th>Static Alert</th><th>ADWIN Triggered</th>" +
-        "</tr></thead><tbody>" + bodyRows + "</tbody>";
+        const last = visible[visible.length - 1];
+        document.getElementById("liveVal").textContent = last[sensor].toFixed(2) + " " + cfg.unit;
+        document.getElementById("ptsVal").textContent = visible.length + " / " + pts.length;
+        document.getElementById("driftVal").textContent = String(driftCnt);
+        document.getElementById("alertVal").textContent = String(alertCnt);
+      }
     }
 
-    init();
+    setupUI();
   </script>
 </body>
 </html>
@@ -365,7 +410,7 @@ def write_m3_dashboard(
     scenario_streams: Mapping[str, Sequence[Mapping[str, Any]]],
     thresholds: ThresholdConfig | None = None,
 ) -> None:
-    """Write self-contained interactive `dashboard.html` for an M3 run."""
+    """Write self-contained animated `dashboard.html` for an M3 run."""
     cfg = thresholds or ThresholdConfig()
     payload: dict[str, Any] = {
         "report": report,

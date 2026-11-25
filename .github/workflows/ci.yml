@@ -29,7 +29,10 @@ jobs:
           cache-dependency-path: requirements-dev.txt
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install --no-deps -r requirements-tsb-ad.txt
 
       - name: Ruff lint
         run: ruff check app tests
@@ -45,6 +48,90 @@ jobs:
 
       - name: Validate Docker Compose configuration
         run: docker compose -f docker-compose.yml config -q
+
+      - name: Run lightweight M4 comparative ML benchmark smoke test (no external downloads)
+        run: |
+          python - <<'PY'
+          import csv, json, tempfile
+          from pathlib import Path
+          import numpy as np
+          from app.m4_benchmark import main as m4_main
+
+          rng = np.random.default_rng(42)
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              skab = root / "skab" / "data"
+              (skab / "valve1").mkdir(parents=True)
+              (skab / "anomaly-free").mkdir(parents=True)
+
+              # Fault SKAB experiment (semicolon-delimited, separate anomaly & changepoint)
+              rows_fault = ["datetime;Accelerometer1RMS;Pressure;Temperature;anomaly;changepoint"]
+              for i in range(160):
+                  is_anom = 1 if 110 <= i < 140 else 0
+                  is_cp = 1 if i in (110, 140) else 0
+                  shift = 8.0 if is_anom else 0.0
+                  v1 = 0.5 + 0.03 * rng.normal() + 0.4 * shift
+                  p1 = 5.0 + 0.05 * rng.normal() + shift
+                  t1 = 50.0 + 0.1 * rng.normal() + 2.0 * shift
+                  rows_fault.append(
+                      f"2026-01-01 00:{i // 60:02d}:{i % 60:02d};{v1:.4f};{p1:.4f};{t1:.4f};{is_anom};{is_cp}"
+                  )
+              (skab / "valve1" / "0.csv").write_text("\n".join(rows_fault) + "\n", encoding="utf-8")
+
+              rows_af = ["datetime;Accelerometer1RMS;Pressure;Temperature"]
+              for i in range(120):
+                  v1 = 0.5 + 0.03 * rng.normal()
+                  p1 = 5.0 + 0.05 * rng.normal()
+                  t1 = 50.0 + 0.1 * rng.normal()
+                  rows_af.append(
+                      f"2026-01-02 00:{i // 60:02d}:{i % 60:02d};{v1:.4f};{p1:.4f};{t1:.4f}"
+                  )
+              (skab / "anomaly-free" / "anomaly-free.csv").write_text(
+                  "\n".join(rows_af) + "\n", encoding="utf-8"
+              )
+
+              # Official-format TSB-AD-M fixture (_tr_100_1st_130.csv + TSB-AD-M-Eva.csv)
+              tsb = root / "tsb_ad_m"
+              (tsb / "TSB-AD-M").mkdir(parents=True)
+              fname = "001_Synth_id_1_Sensor_tr_100_1st_130.csv"
+              (tsb / "TSB-AD-M-Eva.csv").write_text(f"file_name\n{fname}\n", encoding="utf-8")
+              tsb_rows = ["ch0,ch1,ch2,Label"]
+              for i in range(180):
+                  lbl = 1 if 130 <= i < 155 else 0
+                  bump = 7.0 if lbl else 0.0
+                  c0 = float(np.sin(i / 5.0)) + 0.05 * rng.normal() + bump
+                  c1 = float(np.cos(i / 5.0)) + 0.05 * rng.normal() + bump
+                  c2 = 1.0 + 0.05 * rng.normal() + bump
+                  tsb_rows.append(f"{c0:.5f},{c1:.5f},{c2:.5f},{lbl}")
+              (tsb / "TSB-AD-M" / fname).write_text("\n".join(tsb_rows) + "\n", encoding="utf-8")
+
+              out_dir = root / "out_m4"
+              rc = m4_main([
+                  "--run-id", "ci_smoke",
+                  "--seed", "42",
+                  "--skab-dir", str(root / "skab"),
+                  "--tsb-dir", str(tsb),
+                  "--output-dir", str(out_dir),
+              ])
+              assert rc == 0, f"m4_benchmark failed with exit code {rc}"
+              for name in (
+                  "benchmark_report.json",
+                  "benchmark_report.md",
+                  "comparison_summary.csv",
+                  "per_experiment_metrics.csv",
+              ):
+                  f = out_dir / name
+                  assert f.exists() and f.stat().st_size > 0, f"Missing/empty {f}"
+              data = json.loads((out_dir / "benchmark_report.json").read_text(encoding="utf-8"))
+              assert set(data["model_parameters"]) == {
+                  "static_threshold",
+                  "isolation_forest",
+                  "half_space_trees",
+              }
+              with (out_dir / "per_experiment_metrics.csv").open(encoding="utf-8") as handle:
+                  assert sum(1 for _ in csv.DictReader(handle)) == 9
+              print("Validated M4 smoke benchmark bundle successfully")
+          PY
 
   kafka-integration:
     name: Kafka Integration & Streaming Report
@@ -62,7 +149,10 @@ jobs:
           cache-dependency-path: requirements-dev.txt
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install --no-deps -r requirements-tsb-ad.txt
 
       - name: Ensure script permissions
         run: chmod +x scripts/*.sh

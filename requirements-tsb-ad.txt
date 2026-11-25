@@ -1,0 +1,4 @@
+# Official TSB-AD evaluation package (installed with --no-deps so CI/local setups
+# use TSB_AD.evaluation.metrics and TSB_AD.utils.slidingWindows without pulling
+# 2.5 GB of unused PyTorch/Transformers deep-learning model wrappers).
+tsb-ad==1.5
