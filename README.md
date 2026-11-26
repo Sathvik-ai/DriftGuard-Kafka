@@ -314,6 +314,21 @@ M8 adds zero-shot probabilistic foundation model anomaly detection using **Amazo
 
 ---
 
+## 17. Milestone 9 (M9): Comprehensive Multi-Seed Comparative Evaluation
+
+M9 runs a unified, deterministic, multi-seed evaluation across all five deep-learning / foundation models (`lstm_autoencoder`, `tcn_autoencoder`, `tranad`, `chronos2_*`, `timesfm3_*`) and all three M4 classical ML baselines (`static_threshold`, `isolation_forest`, `half_space_trees`) in `app/m9_evaluation.py` and `app/m9_charts.py` (`configs/m9_eval.json`):
+
+- **Multi-Seed Reproducibility & Split Verification**: Runs trained stochastic models across multiple seeds (`42, 1337, 2026`, reporting `mean ± std`) and deterministic/zero-shot models once on identical SHA-256-verified chronological splits (`SKAB` multivariate vs. `TSB-AD-M` independent univariate).
+- **Error Analysis & Resource-Efficiency SLA Flagging**: Decomposes false positives (`anomaly_free`, `pre_fault_lead`, `post_fault_recovery`, `isolated_background`) and false negatives (`missed_episodes_short/long`, `onset_delay`, `adaptation_dropoff`), separates forecasting accuracy from anomaly detection accuracy, flags high-F1 models that violate streaming latency/memory SLAs, and identifies the best model per scenario without claiming an unsupported universal winner.
+- **Run M9 Evaluation**:
+  ```bash
+  make m9-demo
+  ```
+- **Reproducible Outputs (`reports/m9/<run_id>/`)**:
+  - `m9_report.md`, `m9_report.json`, `unified_comparison.csv`, `per_seed_summary.csv`, `per_experiment_metrics.csv`, `error_analysis.csv`, and pure-SVG performance charts in `charts/`. All historical M1–M8 reports remain untouched.
+
+---
+
 ## 11. Automated Streaming Reports
 
 Every successful `make demo` run generates a structured report bundle under `reports/runs/<run_id>/` (ignored by git so experiment outputs are never committed):

@@ -1,0 +1,68 @@
+{
+  "seeds": [42, 1337, 2026],
+  "device": "auto",
+  "calibration_quantile": 0.99,
+  "tsb_max_per_domain": 1,
+  "tsfm_max_tsb_series_rows": 50000,
+  "cache_dir": "models/hf_cache",
+  "resource_sla": {
+    "max_latency_ms": 0.1,
+    "min_throughput_ev_s": 10000.0,
+    "max_rss_mib": 1024.0,
+    "max_training_s": 30.0,
+    "high_f1_threshold_skab": 0.70,
+    "high_f1_threshold_tsb": 0.35
+  },
+  "lstm": {
+    "window_size": 32,
+    "hidden_dim": 32,
+    "latent_dim": 16,
+    "num_layers": 2,
+    "dropout": 0.1,
+    "batch_size": 64,
+    "epochs": 15,
+    "learning_rate": 0.002,
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.0001
+  },
+  "tcn": {
+    "window_size": 32,
+    "hidden_channels": 24,
+    "latent_dim": 8,
+    "kernel_size": 3,
+    "dilations": [1, 2, 4],
+    "dropout": 0.1,
+    "batch_size": 64,
+    "epochs": 12,
+    "learning_rate": 0.002,
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.0001,
+    "score_reduction": "window_mean",
+    "eval_batch_size": 4096
+  },
+  "tranad": {
+    "window_size": 10,
+    "dim_feedforward": 16,
+    "num_encoder_layers": 1,
+    "num_decoder_layers": 1,
+    "dropout": 0.1,
+    "batch_size": 128,
+    "epochs": 10,
+    "learning_rate": 0.002,
+    "weight_decay": 1e-05,
+    "lr_step_size": 5,
+    "lr_gamma": 0.9,
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.0001,
+    "score_mode": "both_phases",
+    "eval_batch_size": 8192
+  },
+  "tsfm": {
+    "chronos2_model_id": "amazon/chronos-2",
+    "timesfm3_model_id": "google/timesfm-3.0-pytorch",
+    "context_length": 128,
+    "prediction_length": 64,
+    "batch_size": 64,
+    "max_active_univariate_channels": 16
+  }
+}
