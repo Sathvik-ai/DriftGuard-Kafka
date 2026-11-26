@@ -275,6 +275,45 @@ M6 implements a causal dilated residual TCN sequence autoencoder in `app/m6_tcn_
 
 ---
 
+## 15. Milestone 7 (M7): TranAD Two-Phase Self-Conditioning Transformer
+
+M7 implements **TranAD** (*Tuli et al., PVLDB 2022*, `https://github.com/imperial-qore/TranAD`) in `app/m7_tranad.py` and `app/m7_benchmark.py` (`configs/m7_tranad.json`):
+
+- **Architecture**:
+  - **Concatenated Conditioning (`2 * D`)**: Projects context windows `W` concatenated with focus scores `c` (`[W || c]`) through sinusoidal positional encoding (`sin + cos`) into a shared Transformer encoder (`nhead=feats`, `LeakyReLU` feedforward).
+  - **Phase 1 (`Decoder 1`)**: Evaluates zero focus `c_1 = 0` against target `tgt = W[-1:]` to produce initial reconstruction `x_1` (`Sigmoid` projection) and focus signal `c_2 = (x_1 - W)^2`.
+  - **Phase 2 (`Decoder 2`)**: Re-encodes `[W || c_2]` and decodes refined reconstruction `x_2`, trained with epoch-evolving loss `(1/n) * MSE(x_1, tgt) + (1 - 1/n) * MSE(x_2, tgt)` and scored via `0.5 * (x_1 - tgt)^2 + 0.5 * (x_2 - tgt)^2` with per-feature attribution.
+  - **Documented Deviations from PVLDB 2022**: Uses normal-only `[0, 1]` `TrainingOnlyMinMaxScaler` + held-out `x_val_normal` quantile calibration (`0.99`) instead of POT on test distributions, `AdamW` + cosine LR instead of `StepLR`, and `independent_univariate` modeling on TSB series.
+- **Run M7 Experiment**:
+  ```bash
+  make m7-demo
+  ```
+- **Reproducible Outputs (`reports/m7/<run_id>/`)**:
+  - `m7_report.json`, `m7_report.md`, `comparison_summary.csv`, and `per_experiment_metrics.csv` comparing `tranad` against M4–M6 baselines while preserving M1–M6 outputs untouched.
+
+---
+
+## 16. Milestone 8 (M8): Time-Series Foundation Model Anomaly Detection
+
+M8 adds zero-shot probabilistic foundation model anomaly detection using **Amazon Chronos-2** (`app/m8_chronos2.py`) and **Google TimesFM 3.0** (`app/m8_timesfm.py`) over a shared causal forecasting base (`app/m8_tsfm_base.py`, `app/m8_benchmark.py`, `configs/m8_tsfm.json`):
+
+- **Foundation Models & Licensing**:
+  1. **Amazon Chronos-2** (`amazon/chronos-2`, ~120M params, ~456 MiB safetensors, `chronos-forecasting==2.3.2`) — **`Apache-2.0`** license (code and weights).
+  2. **Google TimesFM 3.0** (`google/timesfm-3.0-pytorch`, ~331M params, ~1.23 GiB safetensors, `timesfm==3.0.2`) — code is `Apache-2.0`; pretrained weights are governed by **`timesfm-non-commercial-license-v1.0`** (non-commercial research only).
+- **Zero-Shot Causal Protocol & Dual Scoring**:
+  - No fine-tuning on benchmark series; `TrainingOnlyScaler` (`sigma_d`) is fit strictly on `x_train_normal`.
+  - Blocked causal context windows (`<= t_0 - 1` only; zero future test leakage into context), native multivariate forecasting on SKAB (`8` channels), and independent univariate forecasting on TSB active channels.
+  - Evaluates **both** normalized forecast residuals (`chronos2_zero_shot`, `timesfm3_zero_shot`) and `[0.1, 0.9]` prediction interval violations (`chronos2_interval`, `timesfm3_interval`), calibrated strictly on `x_val_normal`.
+- **Optional Foundation Model Setup & Execution**:
+  ```bash
+  uv pip install --python .venv/bin/python -r requirements-m8.txt
+  make m8-demo
+  ```
+- **Reproducible Outputs (`reports/m8/<run_id>/`)**:
+  - `m8_report.json`, `m8_report.md`, `comparison_summary.csv`, and `per_experiment_metrics.csv` comparing all 10 detector variants (M4–M7 + Chronos-2 + TimesFM 3.0) across anomaly detection metrics, forecasting error (`MAE`, `RMSE`, `Normalized MAE`, `80% Interval Coverage`), latency, throughput, and memory.
+
+---
+
 ## 11. Automated Streaming Reports
 
 Every successful `make demo` run generates a structured report bundle under `reports/runs/<run_id>/` (ignored by git so experiment outputs are never committed):

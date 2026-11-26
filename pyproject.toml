@@ -36,6 +36,12 @@ module = [
   "pandas.*",
   "psutil",
   "psutil.*",
+  "chronos",
+  "chronos.*",
+  "timesfm",
+  "timesfm.*",
+  "timesfm3",
+  "timesfm3.*",
 ]
 ignore_missing_imports = true
 

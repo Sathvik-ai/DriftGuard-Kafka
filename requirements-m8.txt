@@ -1,0 +1,5 @@
+# Optional Milestone 8 (M8) Time-Series Foundation Model dependencies.
+# Installed locally via `uv pip install -r requirements-m8.txt` (kept optional in CI
+# to avoid mandatory multi-hundred-megabyte pretrained checkpoint downloads).
+chronos-forecasting==2.3.2
+timesfm==3.0.2
