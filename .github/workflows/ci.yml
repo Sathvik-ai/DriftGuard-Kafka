@@ -31,6 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0
           pip install -r requirements-dev.txt
           pip install --no-deps -r requirements-tsb-ad.txt
 
@@ -133,6 +134,148 @@ jobs:
               print("Validated M4 smoke benchmark bundle successfully")
           PY
 
+      - name: Run lightweight M5 LSTM Autoencoder smoke test (CPU, no external downloads)
+        run: |
+          python - <<'PY'
+          import csv, json, tempfile
+          from pathlib import Path
+          import numpy as np
+          from app.m5_benchmark import main as m5_main
+
+          rng = np.random.default_rng(42)
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              skab = root / "skab" / "data" / "valve1"
+              skab.mkdir(parents=True)
+              rows_fault = ["datetime;Accelerometer1RMS;Pressure;Temperature;anomaly;changepoint"]
+              for i in range(140):
+                  anom = 1 if 95 <= i < 120 else 0
+                  cp = 1 if i in (95, 120) else 0
+                  shift = 8.0 if anom else 0.0
+                  v1 = 0.5 + 0.03 * rng.normal() + 0.4 * shift
+                  p1 = 5.0 + 0.05 * rng.normal() + shift
+                  t1 = 50.0 + 0.1 * rng.normal() + 2.0 * shift
+                  rows_fault.append(
+                      f"2026-01-01 00:{i // 60:02d}:{i % 60:02d};{v1:.4f};{p1:.4f};{t1:.4f};{anom};{cp}"
+                  )
+              (skab / "0.csv").write_text("\n".join(rows_fault) + "\n", encoding="utf-8")
+
+              tsb = root / "tsb_ad_m"
+              (tsb / "TSB-AD-M").mkdir(parents=True)
+              fname = "001_Synth_id_1_Sensor_tr_80_1st_105.csv"
+              (tsb / "TSB-AD-M-Eva.csv").write_text(f"file_name\n{fname}\n", encoding="utf-8")
+              tsb_rows = ["ch0,ch1,Label"]
+              for i in range(140):
+                  lbl = 1 if 105 <= i < 125 else 0
+                  bump = 7.0 if lbl else 0.0
+                  c0 = float(np.sin(i / 5.0)) + 0.05 * rng.normal() + bump
+                  c1 = 0.0  # inactive indicator channel to verify univariate handling
+                  tsb_rows.append(f"{c0:.5f},{c1:.5f},{lbl}")
+              (tsb / "TSB-AD-M" / fname).write_text("\n".join(tsb_rows) + "\n", encoding="utf-8")
+
+              out_dir = root / "out_m5"
+              rc = m5_main([
+                  "--run-id", "ci_m5_smoke",
+                  "--device", "cpu",
+                  "--window-size", "8",
+                  "--hidden-dim", "12",
+                  "--latent-dim", "6",
+                  "--num-layers", "1",
+                  "--dropout", "0.0",
+                  "--epochs", "4",
+                  "--batch-size", "32",
+                  "--skab-dir", str(root / "skab"),
+                  "--tsb-dir", str(tsb),
+                  "--output-dir", str(out_dir),
+              ])
+              assert rc == 0, f"m5_benchmark failed with exit code {rc}"
+              for name in (
+                  "m5_report.json",
+                  "m5_report.md",
+                  "comparison_summary.csv",
+                  "per_experiment_metrics.csv",
+              ):
+                  f = out_dir / name
+                  assert f.exists() and f.stat().st_size > 0, f"Missing/empty {f}"
+              data = json.loads((out_dir / "m5_report.json").read_text(encoding="utf-8"))
+              assert data["series_modes"] == {
+                  "SKAB": "multivariate",
+                  "TSB-AD-M": "independent_univariate",
+              }
+              with (out_dir / "per_experiment_metrics.csv").open(encoding="utf-8") as handle:
+                  assert sum(1 for _ in csv.DictReader(handle)) == 8
+              print("Validated M5 LSTM Autoencoder smoke bundle successfully")
+          PY
+
+      - name: Run lightweight M6 TCN Autoencoder smoke test (CPU, no external downloads)
+        run: |
+          python - <<'PY'
+          import csv, json, tempfile
+          from pathlib import Path
+          import numpy as np
+          from app.m6_benchmark import main as m6_main
+
+          rng = np.random.default_rng(42)
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              skab = root / "skab" / "data" / "valve1"
+              skab.mkdir(parents=True)
+              rows_fault = ["datetime;Accelerometer1RMS;Pressure;Temperature;anomaly;changepoint"]
+              for i in range(140):
+                  anom = 1 if 95 <= i < 120 else 0
+                  cp = 1 if i in (95, 120) else 0
+                  shift = 8.0 if anom else 0.0
+                  v1 = 0.5 + 0.03 * rng.normal() + 0.4 * shift
+                  p1 = 5.0 + 0.05 * rng.normal() + shift
+                  t1 = 50.0 + 0.1 * rng.normal() + 2.0 * shift
+                  rows_fault.append(
+                      f"2026-01-01 00:{i // 60:02d}:{i % 60:02d};{v1:.4f};{p1:.4f};{t1:.4f};{anom};{cp}"
+                  )
+              (skab / "0.csv").write_text("\n".join(rows_fault) + "\n", encoding="utf-8")
+
+              tsb = root / "tsb_ad_m"
+              (tsb / "TSB-AD-M").mkdir(parents=True)
+              fname = "001_Synth_id_1_Sensor_tr_80_1st_105.csv"
+              (tsb / "TSB-AD-M-Eva.csv").write_text(f"file_name\n{fname}\n", encoding="utf-8")
+              tsb_rows = ["ch0,ch1,Label"]
+              for i in range(140):
+                  lbl = 1 if 105 <= i < 125 else 0
+                  bump = 7.0 if lbl else 0.0
+                  c0 = float(np.sin(i / 5.0)) + 0.05 * rng.normal() + bump
+                  c1 = 0.0
+                  tsb_rows.append(f"{c0:.5f},{c1:.5f},{lbl}")
+              (tsb / "TSB-AD-M" / fname).write_text("\n".join(tsb_rows) + "\n", encoding="utf-8")
+
+              out_dir = root / "out_m6"
+              rc = m6_main([
+                  "--run-id", "ci_m6_smoke",
+                  "--device", "cpu",
+                  "--window-size", "8",
+                  "--hidden-channels", "12",
+                  "--latent-dim", "4",
+                  "--kernel-size", "3",
+                  "--dilations", "1", "2",
+                  "--dropout", "0.0",
+                  "--epochs", "4",
+                  "--batch-size", "32",
+                  "--skab-dir", str(root / "skab"),
+                  "--tsb-dir", str(tsb),
+                  "--output-dir", str(out_dir),
+              ])
+              assert rc == 0, f"m6_benchmark failed with exit code {rc}"
+              for name in (
+                  "m6_report.json",
+                  "m6_report.md",
+                  "comparison_summary.csv",
+                  "per_experiment_metrics.csv",
+              ):
+                  f = out_dir / name
+                  assert f.exists() and f.stat().st_size > 0, f"Missing/empty {f}"
+              with (out_dir / "per_experiment_metrics.csv").open(encoding="utf-8") as handle:
+                  assert sum(1 for _ in csv.DictReader(handle)) == 10
+              print("Validated M6 TCN Autoencoder smoke bundle successfully")
+          PY
+
   kafka-integration:
     name: Kafka Integration & Streaming Report
     runs-on: ubuntu-latest
@@ -151,6 +294,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0
           pip install -r requirements-dev.txt
           pip install --no-deps -r requirements-tsb-ad.txt
 

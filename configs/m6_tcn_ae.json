@@ -1,0 +1,21 @@
+{
+  "seed": 42,
+  "device": "auto",
+  "window_size": 32,
+  "hidden_channels": 24,
+  "latent_dim": 8,
+  "kernel_size": 3,
+  "dilations": [1, 2, 4],
+  "dropout": 0.1,
+  "batch_size": 64,
+  "epochs": 12,
+  "learning_rate": 0.002,
+  "early_stopping_patience": 3,
+  "early_stopping_min_delta": 0.0001,
+  "calibration_quantile": 0.99,
+  "score_reduction": "window_mean",
+  "eval_batch_size": 4096,
+  "skab_channel_mode": "multivariate",
+  "tsb_channel_mode": "independent_univariate",
+  "tsb_max_per_domain": 1
+}

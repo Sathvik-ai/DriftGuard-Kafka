@@ -16,10 +16,16 @@ htmlcov/
 # Local configuration (may contain machine-specific values)
 .env
 
-# Demo run artefacts, generated reports, and external benchmark datasets
+# Demo run artefacts, generated reports, model weights/caches, and external datasets
 runs/
 reports/
 data/external/
+models/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
 
 # macOS / editors
 .DS_Store

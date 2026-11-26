@@ -235,6 +235,46 @@ M4 benchmarks three unsupervised anomaly detectors (`app/m4_models.py`, `app/m4_
 
 ---
 
+## 13. Milestone 5 (M5): Sequence-to-Sequence LSTM Autoencoder
+
+M5 adds deep temporal reconstruction-based anomaly detection in `app/m5_lstm_autoencoder.py` and `app/m5_benchmark.py` (`torch==2.15.0`, configuration in `configs/m5_lstm_ae.json`):
+
+- **Architecture**:
+  - **Encoder**: Multi-layer `nn.LSTM` + bottleneck `nn.Linear(hidden_dim, latent_dim)` + `Tanh` compressing temporal windows `(B, W, D)` into latent temporal vectors `z`.
+  - **Decoder**: Latent bridge + multi-layer `nn.LSTM` + linear output projection reconstructing `(B, W, D)`.
+  - **Dual Series Modes**:
+    - **SKAB (`multivariate`)**: Jointly reconstructs coupled 8-sensor physical testbed windows `(B, W, 8)`.
+    - **TSB (`independent_univariate`)**: Models each channel strictly as an independent 1D univariate series `(B, W, 1)` without falsely representing heterogeneous/command-indicator TSB columns as coupled multivariate vectors.
+  - **Leakage-Free Protocol**: `TrainingOnlyScaler` fit strictly on `x_train_normal`; boundary-preserving causal windows; early stopping on normal training windows; threshold calibrated strictly on `x_val_normal` reconstruction error; outputs both per-feature `(N, D)` and overall `(N,)` anomaly scores.
+  - **Hardware Support**: Detects Apple Silicon and PyTorch MPS availability automatically with clean CPU fallback.
+- **Run M5 Experiment**:
+  ```bash
+  make m5-demo
+  # Or customize config / domain coverage:
+  .venv/bin/python -m app.m5_lstm_autoencoder --config configs/m5_lstm_ae.json --tsb-max-per-domain 1
+  ```
+- **Reproducible Outputs (`reports/m5/<run_id>/`)**:
+  - `m5_report.json`, `m5_report.md`, `comparison_summary.csv`, and `per_experiment_metrics.csv` (comparing `lstm_autoencoder` against `static_threshold`, `isolation_forest`, and `half_space_trees` on Precision, Recall, F1, FPR, PR-AUC, VUS-PR, episode detection delay, training duration, inference latency, throughput, and peak memory).
+
+---
+
+## 14. Milestone 6 (M6): Temporal Convolutional Network (TCN) Autoencoder
+
+M6 implements a causal dilated residual TCN sequence autoencoder in `app/m6_tcn_autoencoder.py` and `app/m6_benchmark.py` (`configs/m6_tcn_ae.json`):
+
+- **Architecture**:
+  - **Causal Convolutions (`CausalConv1d`)**: Left-only temporal padding `(kernel_size - 1) * dilation` guarantees zero future lookahead (`∂y_t / ∂x_s == 0` for `s > t`).
+  - **Dilated Residual Blocks (`TCNResidualBlock`)**: Exponential dilations `[1, 2, 4, 8]` with kernel size `3` yield a 61-step causal receptive field capturing both short-term and long-term temporal patterns, stabilized by GELU activations, dropout, and `1x1` residual shortcuts.
+  - **Undercomplete Temporal Bottleneck**: Compresses multi-scale encoder representations into a low-dimensional latent vector `z` before causal TCN decoding, preventing trivial identity copying on both multivariate SKAB (`input_dim=8`) and independent univariate TSB (`input_dim=1`) series.
+- **Run M6 Experiment**:
+  ```bash
+  make m6-demo
+  ```
+- **Reproducible Outputs (`reports/m6/<run_id>/`)**:
+  - `m6_report.json`, `m6_report.md`, `comparison_summary.csv`, and `per_experiment_metrics.csv` comparing `tcn_autoencoder` against `lstm_autoencoder`, `static_threshold`, `isolation_forest`, and `half_space_trees` while preserving all existing M1–M5 outputs untouched.
+
+---
+
 ## 11. Automated Streaming Reports
 
 Every successful `make demo` run generates a structured report bundle under `reports/runs/<run_id>/` (ignored by git so experiment outputs are never committed):
