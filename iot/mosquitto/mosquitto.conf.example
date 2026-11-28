@@ -1,0 +1,11 @@
+# Mosquitto broker configuration template for authenticated + ACL-protected
+# DriftGuard-Kafka M10.1 MQTT transport.
+# Copy / customize for cloud or self-hosted TLS termination.
+listener 1883 0.0.0.0
+allow_anonymous false
+password_file /mosquitto/config/passwords.txt
+acl_file /mosquitto/config/acl.conf
+persistence false
+log_type error
+log_type warning
+log_type notice

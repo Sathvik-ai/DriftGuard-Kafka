@@ -359,6 +359,21 @@ M10-IoT integrates a continuously running **Wokwi virtual ESP32** (`iot/wokwi_es
 
 ---
 
+## 20. Milestone 10.1 (M10.1): Full Online IoT Pipeline, Live 3-Channel ML/DL/TSFM Inference & Streamlit Cloud Observatory
+
+M10.1 extends M10-IoT with authenticated MQTT transport, Apple Silicon MPS streaming inference across all 9 methods, and a public-cloud-ready Streamlit observatory:
+
+- **Authenticated Wokwi Firmware & MQTT Health**: `iot/wokwi_esp32/sketch.ino` publishes heartbeats/LWT (`<namespace>/<device_id>/heartbeat`) and verifies `command_token` on `<namespace>/<device_id>/command` for remote `set_profile` switching. `iot/mosquitto/` provides role-separated ACL templates (`wokwi_device`, `mac_backend`, `streamlit_readonly`).
+- **3-Channel Streaming ML/DL/TSFM Inference (`app/streaming_inference.py`)**: Evaluates `static_threshold`, `isolation_forest`, `half_space_trees`, `lstm_autoencoder`, `tcn_autoencoder`, `tranad`, `chronos2_zero_shot`, `timesfm3_zero_shot`, and `river_adwin` on the 3-channel IoT stream (`temperature_c`, `vibration_mm_s`, `pressure_bar`), rejecting 8-feature SKAB or 1-feature TSB checkpoints (`SchemaMismatchError`), training/calibrating strictly on normal splits, and reporting separated `process_rss_mib` vs. Apple Silicon `mps_allocated_mib` / `mps_driver_mib`.
+- **Kafka-Confirmed Dashboard Relay & Streamlit UI (`app/dashboard_publisher.py`, `dashboard/`)**: Re-publishes confirmed Kafka events onto `<namespace>/dashboard/*` (including retained `snapshot`) for read-only consumption in `dashboard/streamlit_app.py` (7 dark-theme tabs, honest `LIVE`/`DELAYED`/`OFFLINE`/`DEMO` freshness states, zero public Kafka exposure). See [`dashboard/README.md`](dashboard/README.md) for Streamlit Community Cloud deployment steps.
+- **Run Continuous 15-Minute Online Multi-Phase Protocol**:
+  ```bash
+  make m10_1-online-test
+  ```
+- **Reproducible Outputs (`reports/m10_1/<run_id>/`)**: `summary_report.{json,md}`, `events.jsonl`, `scenario_truth.jsonl`, `model_metrics.csv`, `drift_events.csv`, `alerts.csv`, `device_status.json`, and `hardware_memory_report.json`.
+
+---
+
 ## 11. Automated Streaming Reports
 
 Every successful `make demo` run generates a structured report bundle under `reports/runs/<run_id>/` (ignored by git so experiment outputs are never committed):

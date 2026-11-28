@@ -16,6 +16,8 @@ DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
 DEFAULT_TOPIC = "research.telemetry.raw"
 DEFAULT_ALERTS_TOPIC = "research.telemetry.alerts"
 DEFAULT_DRIFT_TOPIC = "research.telemetry.drift"
+DEFAULT_MODEL_SCORES_TOPIC = "research.telemetry.model_scores"
+DEFAULT_DEVICE_STATUS_TOPIC = "research.telemetry.device_status"
 DEFAULT_CONSUMER_GROUP = "driftguard-m1-consumer"
 DEFAULT_CLIENT_ID = "driftguard-m1"
 DEFAULT_MACHINE_COUNT = 5
@@ -40,6 +42,8 @@ class Settings:
     log_level: str
     alerts_topic: str = DEFAULT_ALERTS_TOPIC
     drift_topic: str = DEFAULT_DRIFT_TOPIC
+    model_scores_topic: str = DEFAULT_MODEL_SCORES_TOPIC
+    device_status_topic: str = DEFAULT_DEVICE_STATUS_TOPIC
 
 
 def _read_str(env: Mapping[str, str], name: str, default: str) -> str:
@@ -86,6 +90,16 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         log_level=_read_log_level(source),
         alerts_topic=_read_str(source, "KAFKA_ALERTS_TOPIC", DEFAULT_ALERTS_TOPIC),
         drift_topic=_read_str(source, "KAFKA_DRIFT_TOPIC", DEFAULT_DRIFT_TOPIC),
+        model_scores_topic=_read_str(
+            source,
+            "KAFKA_MODEL_SCORES_TOPIC",
+            DEFAULT_MODEL_SCORES_TOPIC,
+        ),
+        device_status_topic=_read_str(
+            source,
+            "KAFKA_DEVICE_STATUS_TOPIC",
+            DEFAULT_DEVICE_STATUS_TOPIC,
+        ),
     )
 
 

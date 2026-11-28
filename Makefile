@@ -16,7 +16,8 @@ endif
 .PHONY: help setup kafka-up kafka-down kafka-clean kafka-logs kafka-verify topic-create \
         producer consumer test coverage lint format typecheck check demo m2-demo m3-demo \
         m3-robustness m4-benchmark m5-demo m6-demo m7-demo m8-demo m9-demo m9-1-demo \
-        iot-bridge m10-iot-smoke dashboard clean
+        iot-bridge iot-inference dashboard-pub m10-iot-smoke m10_1-online-test \
+        dashboard sse-dashboard clean
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -115,7 +116,19 @@ iot-bridge: ## Run M10-IoT MQTT-to-Kafka bridge (reads MQTT_* from .env / enviro
 m10-iot-smoke: ## Run live end-to-end MQTT -> Bridge -> Kafka -> Detector smoke test
 	./scripts/run_m10_iot_smoke.sh
 
-dashboard: ## Launch live real-time streaming dashboard at http://127.0.0.1:8765
+iot-inference: ## Run M10.1 3-channel live ML/DL/TSFM + ADWIN streaming inference worker
+	$(PY) -m app.streaming_inference
+
+dashboard-pub: ## Run M10.1 Kafka -> MQTT verified dashboard state publisher
+	$(PY) -m app.dashboard_publisher
+
+m10_1-online-test: ## Run M10.1 continuous 15-min multi-phase online IoT pipeline validation
+	./scripts/run_m10_1_online_test.sh 1.0
+
+dashboard: ## Launch M10.1 dark-theme Streamlit live observatory dashboard
+	.venv/bin/streamlit run dashboard/streamlit_app.py
+
+sse-dashboard: ## Launch legacy M3 real-time HTML/SSE streaming dashboard at http://127.0.0.1:8765
 	$(PY) -m app.live_dashboard --port 8765
 
 clean: ## Remove caches and run artefacts (keeps .venv and Kafka data)

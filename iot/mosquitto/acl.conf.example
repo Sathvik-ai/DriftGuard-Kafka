@@ -1,0 +1,20 @@
+# Role-separated ACL template for DriftGuard-Kafka M10.1.
+# Replace `driftguard/demo` with your private namespace token.
+
+# 1) Wokwi ESP32 device identity: may publish telemetry/heartbeat and subscribe to commands.
+user wokwi_device
+topic write driftguard/demo/+/telemetry
+topic write driftguard/demo/+/heartbeat
+topic read driftguard/demo/+/command
+
+# 2) Mac local backend (MQTT-Kafka bridge + Dashboard Publisher):
+#    reads raw device streams, sends device commands, publishes verified dashboard state.
+user mac_backend
+topic read driftguard/demo/+/telemetry
+topic read driftguard/demo/+/heartbeat
+topic write driftguard/demo/+/command
+topic write driftguard/demo/dashboard/#
+
+# 3) Streamlit Community Cloud viewer: strictly read-only on verified dashboard topics.
+user streamlit_readonly
+topic read driftguard/demo/dashboard/#

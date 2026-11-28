@@ -686,6 +686,11 @@ jobs:
           PYTHON_BIN: python
         run: ./scripts/run_m10_iot_smoke.sh
 
+      - name: Run M10.1 compressed online multi-phase smoke test
+        env:
+          PYTHON_BIN: python
+        run: ./scripts/run_m10_1_online_test.sh 0.02 --disable-tsfms --tsfm-every-n-events 5
+
       - name: Print failure diagnostics
         if: failure()
         run: |

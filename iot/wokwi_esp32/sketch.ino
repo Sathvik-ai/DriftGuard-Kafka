@@ -1,5 +1,5 @@
 /*
- * DriftGuard-Kafka M10-IoT: Online Virtual Industrial IoT ESP32 Firmware (Wokwi)
+ * DriftGuard-Kafka M10.1: Online Virtual Industrial IoT ESP32 Firmware (Wokwi)
  *
  * IMPORTANT RESEARCH NOTE:
  * All sensor outputs (temperature_c, vibration_mm_s, pressure_bar) are SIMULATED
@@ -7,20 +7,12 @@
  * (combining virtual DHT22/potentiometer inputs with deterministic profile models).
  * They are NOT physical industrial transducer measurements.
  *
- * Simulated vibration_mm_s note:
- *   Wokwi does not include a physical triaxial industrial vibration transducer.
- *   `vibration_mm_s` simulates RMS velocity (mm/s, ISO 10816 industrial range
- *   0.0 - 50.0 mm/s) by mapping the virtual potentiometer on GPIO 34 (0..4095)
- *   around BASE_VIBRATION_MM_S plus small bounded stochastic jitter and active
- *   profile perturbations.
- *
- * Selectable Profiles (switch via Serial Monitor commands 1-6 or GPIO 4 button):
- *   1. normal                  - Stationary operating baseline
- *   2. temperature_spike       - Periodic sharp thermal excursions (+38..+48 C)
- *   3. vibration_anomaly       - Periodic mechanical vibration bursts (+12..+18 mm/s)
- *   4. gradual_drift           - Slow linear operating-regime ramp (triggers ADWIN)
- *   5. abrupt_drift            - Immediate step shift in normal regime (triggers ADWIN)
- *   6. intermittent_disconnect - Periodic MQTT drop + reconnect preserving sequence_number
+ * M10.1 Enhancements over M10-IoT:
+ *   - Dedicated periodic device heartbeat topic (MQTT_HEARTBEAT_TOPIC)
+ *   - Authenticated remote profile-command listener (MQTT_COMMAND_TOPIC)
+ *     verifying `command_token` and `"command": "set_profile"`
+ *   - Explicit Last-Will-and-Testament (LWT) offline notice on broker drop
+ *   - TLS CA pinning hook via MQTT_ROOT_CA_PEM when supplied in config.h
  */
 
 #include <WiFi.h>
@@ -36,7 +28,6 @@
   #include "config.example.h"
 #endif
 
-// Hardware pin mapping matching diagram.json
 static const int PIN_DHT = 15;
 static const int PIN_POT_VIB = 34;
 static const int PIN_POT_PRESS = 35;
@@ -76,12 +67,15 @@ static const char* PROFILE_NAMES[PROFILE_COUNT] = {
 Profile activeProfile = PROFILE_NORMAL;
 uint64_t sequenceNumber = 0;       // Monotonically preserved across MQTT reconnects
 uint32_t profileStepCount = 0;
+uint32_t mqttReconnectCount = 0;
+bool hasConnectedMqttOnce = false;
+unsigned long bootMillis = 0;
 unsigned long lastPublishMs = 0;
+unsigned long lastHeartbeatMs = 0;
 unsigned long lastButtonMs = 0;
 bool lastButtonState = HIGH;
 
 float pseudoNoise(float amplitude) {
-  // Bounded symmetric pseudo-noise in [-amplitude, +amplitude]
   long r = random(-1000, 1001);
   return (static_cast<float>(r) / 1000.0f) * amplitude;
 }
@@ -90,69 +84,6 @@ float clampf(float val, float lo, float hi) {
   if (val < lo) return lo;
   if (val > hi) return hi;
   return val;
-}
-
-void setProfile(Profile nextProfile) {
-  activeProfile = nextProfile;
-  profileStepCount = 0;
-  digitalWrite(PIN_LED_FAULT, activeProfile == PROFILE_NORMAL ? LOW : HIGH);
-  Serial.print("[PROFILE] Active profile -> ");
-  Serial.println(PROFILE_NAMES[activeProfile]);
-}
-
-void connectWifi() {
-  if (WiFi.status() == WL_CONNECTED) return;
-  Serial.print("[WIFI] Connecting to ");
-  Serial.println(WIFI_SSID);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(250);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.print("[WIFI] Connected, IP=");
-  Serial.println(WiFi.localIP());
-
-  // Synchronise UTC clock via NTP so timestamps are valid ISO 8601 UTC
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  struct tm timeinfo;
-  int retries = 0;
-  while (!getLocalTime(&timeinfo) && retries < 20) {
-    delay(250);
-    retries++;
-  }
-  Serial.println("[NTP] UTC clock synchronised");
-}
-
-bool ensureMqttConnected() {
-  if (mqttClient.connected()) {
-    digitalWrite(PIN_LED_MQTT, HIGH);
-    return true;
-  }
-  digitalWrite(PIN_LED_MQTT, LOW);
-
-  String clientId = String("driftguard-") + DEVICE_ID + "-" + String((uint32_t)esp_random(), HEX);
-  Serial.print("[MQTT] Connecting to ");
-  Serial.print(MQTT_BROKER_HOST);
-  Serial.print(":");
-  Serial.println(MQTT_BROKER_PORT);
-
-  bool ok = false;
-  if (strlen(MQTT_USERNAME) > 0) {
-    ok = mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD);
-  } else {
-    ok = mqttClient.connect(clientId.c_str());
-  }
-
-  if (ok) {
-    digitalWrite(PIN_LED_MQTT, HIGH);
-    Serial.println("[MQTT] Connected");
-    return true;
-  }
-  Serial.print("[MQTT] Connect failed, rc=");
-  Serial.println(mqttClient.state());
-  return false;
 }
 
 void formatIsoUtc(char* buf, size_t len) {
@@ -175,28 +106,177 @@ void formatIsoUtc(char* buf, size_t len) {
   );
 }
 
+void publishHeartbeat() {
+  if (!mqttClient.connected()) {
+    return;
+  }
+  char isoTs[32];
+  formatIsoUtc(isoTs, sizeof(isoTs));
+
+  JsonDocument doc;
+  doc["device_id"] = DEVICE_ID;
+  doc["machine_id"] = MACHINE_ID;
+  doc["sequence_number"] = sequenceNumber;
+  doc["timestamp"] = isoTs;
+  doc["active_profile"] = PROFILE_NAMES[activeProfile];
+  doc["wifi_rssi_dbm"] = static_cast<int>(WiFi.RSSI());
+  doc["uptime_s"] = static_cast<unsigned long>((millis() - bootMillis) / 1000UL);
+  doc["reconnect_count"] = mqttReconnectCount;
+  doc["status"] = "online";
+
+  char payload[320];
+  serializeJson(doc, payload, sizeof(payload));
+  bool ok = mqttClient.publish(MQTT_HEARTBEAT_TOPIC, payload, false);
+  Serial.println(ok ? "[HB OK]" : "[HB FAIL]");
+}
+
+bool applyProfileByName(const String& cmd) {
+  String norm = cmd;
+  norm.trim();
+  norm.toLowerCase();
+  if (norm == "1" || norm == "normal") {
+    activeProfile = PROFILE_NORMAL;
+  } else if (norm == "2" || norm == "temperature_spike") {
+    activeProfile = PROFILE_TEMPERATURE_SPIKE;
+  } else if (norm == "3" || norm == "vibration_anomaly") {
+    activeProfile = PROFILE_VIBRATION_ANOMALY;
+  } else if (norm == "4" || norm == "gradual_drift") {
+    activeProfile = PROFILE_GRADUAL_DRIFT;
+  } else if (norm == "5" || norm == "abrupt_drift") {
+    activeProfile = PROFILE_ABRUPT_DRIFT;
+  } else if (norm == "6" || norm == "intermittent_disconnect") {
+    activeProfile = PROFILE_INTERMITTENT_DISCONNECT;
+  } else {
+    return false;
+  }
+  profileStepCount = 0;
+  digitalWrite(PIN_LED_FAULT, activeProfile == PROFILE_NORMAL ? LOW : HIGH);
+  Serial.print("[PROFILE] Active profile -> ");
+  Serial.println(PROFILE_NAMES[activeProfile]);
+  publishHeartbeat();
+  return true;
+}
+
+void onMqttCommand(char* topic, byte* payload, unsigned int length) {
+  if (String(topic) != String(MQTT_COMMAND_TOPIC)) {
+    return;
+  }
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, payload, length);
+  if (err) {
+    Serial.println("[CMD REJECTED] Invalid JSON command");
+    return;
+  }
+  const char* expectedToken = MQTT_COMMAND_TOKEN;
+  const char* suppliedToken = doc["command_token"] | "";
+  if (strlen(expectedToken) == 0 || strcmp(expectedToken, suppliedToken) != 0) {
+    Serial.println("[CMD REJECTED] Invalid or empty command_token");
+    return;
+  }
+  const char* cmdType = doc["command"] | "";
+  if (strcmp(cmdType, "set_profile") != 0) {
+    Serial.println("[CMD REJECTED] Unsupported command type");
+    return;
+  }
+  const char* profileName = doc["profile"] | "";
+  if (!applyProfileByName(String(profileName))) {
+    Serial.println("[CMD REJECTED] Unknown profile");
+  }
+}
+
+void connectWifi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  Serial.print("[WIFI] Connecting to ");
+  Serial.println(WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("[WIFI] Connected, IP=");
+  Serial.println(WiFi.localIP());
+
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  struct tm timeinfo;
+  int retries = 0;
+  while (!getLocalTime(&timeinfo) && retries < 20) {
+    delay(250);
+    retries++;
+  }
+  Serial.println("[NTP] UTC clock synchronised");
+}
+
+bool ensureMqttConnected() {
+  if (mqttClient.connected()) {
+    digitalWrite(PIN_LED_MQTT, HIGH);
+    return true;
+  }
+  digitalWrite(PIN_LED_MQTT, LOW);
+
+  String clientId = String("driftguard-") + DEVICE_ID + "-" + String((uint32_t)esp_random(), HEX);
+  char lwtPayload[160];
+  snprintf(
+    lwtPayload,
+    sizeof(lwtPayload),
+    "{\"device_id\":\"%s\",\"machine_id\":\"%s\",\"status\":\"offline\"}",
+    DEVICE_ID,
+    MACHINE_ID
+  );
+
+  bool ok = false;
+  if (strlen(MQTT_USERNAME) > 0) {
+    ok = mqttClient.connect(
+      clientId.c_str(),
+      MQTT_USERNAME,
+      MQTT_PASSWORD,
+      MQTT_HEARTBEAT_TOPIC,
+      1,
+      false,
+      lwtPayload
+    );
+  } else {
+    ok = mqttClient.connect(
+      clientId.c_str(),
+      nullptr,
+      nullptr,
+      MQTT_HEARTBEAT_TOPIC,
+      1,
+      false,
+      lwtPayload
+    );
+  }
+
+  if (ok) {
+    if (hasConnectedMqttOnce) {
+      mqttReconnectCount++;
+    }
+    hasConnectedMqttOnce = true;
+    digitalWrite(PIN_LED_MQTT, HIGH);
+    mqttClient.subscribe(MQTT_COMMAND_TOPIC, 1);
+    Serial.println("[MQTT] Connected & subscribed to command topic");
+    publishHeartbeat();
+    return true;
+  }
+  Serial.print("[MQTT] Connect failed, rc=");
+  Serial.println(mqttClient.state());
+  return false;
+}
+
 void pollControls() {
-  // 1. Pushbutton profile cycle (debounced)
   bool state = digitalRead(PIN_BTN_PROFILE);
   unsigned long now = millis();
   if (state == LOW && lastButtonState == HIGH && (now - lastButtonMs) > 250) {
     lastButtonMs = now;
-    setProfile(static_cast<Profile>((activeProfile + 1) % PROFILE_COUNT));
+    Profile nextP = static_cast<Profile>((activeProfile + 1) % PROFILE_COUNT);
+    applyProfileByName(String(PROFILE_NAMES[nextP]));
   }
   lastButtonState = state;
 
-  // 2. Serial Monitor interactive profile selection (1-6 or profile name)
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-    cmd.toLowerCase();
-    if (cmd == "1" || cmd == "normal") setProfile(PROFILE_NORMAL);
-    else if (cmd == "2" || cmd == "temperature_spike") setProfile(PROFILE_TEMPERATURE_SPIKE);
-    else if (cmd == "3" || cmd == "vibration_anomaly") setProfile(PROFILE_VIBRATION_ANOMALY);
-    else if (cmd == "4" || cmd == "gradual_drift") setProfile(PROFILE_GRADUAL_DRIFT);
-    else if (cmd == "5" || cmd == "abrupt_drift") setProfile(PROFILE_ABRUPT_DRIFT);
-    else if (cmd == "6" || cmd == "intermittent_disconnect") setProfile(PROFILE_INTERMITTENT_DISCONNECT);
-    else if (cmd.length() > 0) {
+    if (cmd.length() > 0 && !applyProfileByName(cmd)) {
       Serial.println("[HELP] Profiles: 1=normal, 2=temperature_spike, 3=vibration_anomaly, "
                      "4=gradual_drift, 5=abrupt_drift, 6=intermittent_disconnect");
     }
@@ -207,8 +287,6 @@ void publishTelemetryReading() {
   sequenceNumber++;
   profileStepCount++;
 
-  // Intermittent disconnect profile: deliberately drop MQTT every 5th reading
-  // while STILL incrementing sequenceNumber so the bridge observes reconnects & gaps.
   if (activeProfile == PROFILE_INTERMITTENT_DISCONNECT && (profileStepCount % 5 == 0)) {
     Serial.print("[PROFILE] Simulated intermittent disconnect at seq=");
     Serial.println((unsigned long)sequenceNumber);
@@ -222,17 +300,15 @@ void publishTelemetryReading() {
     return;
   }
 
-  // Read virtual Wokwi peripherals + combine with realistic baseline
   float dhtTemp = dht.readTemperature();
   float tempBase = isnan(dhtTemp) ? BASE_TEMP_C : clampf(dhtTemp, 15.0f, 80.0f);
-  float vibPotNorm = (analogRead(PIN_POT_VIB) / 4095.0f) - 0.5f;     // [-0.5, +0.5]
-  float pressPotNorm = (analogRead(PIN_POT_PRESS) / 4095.0f) - 0.5f; // [-0.5, +0.5]
+  float vibPotNorm = (analogRead(PIN_POT_VIB) / 4095.0f) - 0.5f;
+  float pressPotNorm = (analogRead(PIN_POT_PRESS) / 4095.0f) - 0.5f;
 
   float tempC = tempBase + pseudoNoise(0.60f);
   float vibMmS = BASE_VIBRATION_MM_S + (vibPotNorm * 0.60f) + pseudoNoise(0.12f);
   float pressBar = BASE_PRESSURE_BAR + (pressPotNorm * 0.40f) + pseudoNoise(0.08f);
 
-  // Apply selected anomaly / concept-drift profile
   switch (activeProfile) {
     case PROFILE_TEMPERATURE_SPIKE:
       if (profileStepCount % 4 == 0) {
@@ -262,7 +338,6 @@ void publishTelemetryReading() {
       break;
   }
 
-  // Enforce DriftGuard physical plausibility bounds
   tempC = clampf(tempC, -40.0f, 150.0f);
   vibMmS = clampf(vibMmS, 0.0f, 50.0f);
   pressBar = clampf(pressBar, 0.0f, 20.0f);
@@ -295,6 +370,7 @@ void publishTelemetryReading() {
 void setup() {
   Serial.begin(115200);
   delay(200);
+  bootMillis = millis();
   pinMode(PIN_BTN_PROFILE, INPUT_PULLUP);
   pinMode(PIN_LED_MQTT, OUTPUT);
   pinMode(PIN_LED_FAULT, OUTPUT);
@@ -304,17 +380,21 @@ void setup() {
   dht.begin();
   randomSeed(esp_random());
 
-  Serial.println("=== DriftGuard-Kafka M10-IoT Virtual ESP32 Device ===");
-  Serial.println("Type 1..6 in Serial Monitor or press Profile button to switch modes.");
+  Serial.println("=== DriftGuard-Kafka M10.1 Virtual ESP32 Device ===");
+  Serial.println("Type 1..6 in Serial Monitor, press Profile button, or send MQTT command.");
 
   connectWifi();
 
 #if MQTT_USE_TLS
-  // For Wokwi prototyping against TLS brokers; pin CA cert via setCACert() for production.
-  netClient.setInsecure();
+  if (MQTT_ROOT_CA_PEM != nullptr) {
+    netClient.setCACert(MQTT_ROOT_CA_PEM);
+  } else {
+    netClient.setInsecure();
+  }
 #endif
   mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqttClient.setBufferSize(512);
+  mqttClient.setCallback(onMqttCommand);
   ensureMqttConnected();
 }
 
@@ -329,5 +409,9 @@ void loop() {
   if (now - lastPublishMs >= PUBLISH_INTERVAL_MS) {
     lastPublishMs = now;
     publishTelemetryReading();
+  }
+  if (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeatMs = now;
+    publishHeartbeat();
   }
 }

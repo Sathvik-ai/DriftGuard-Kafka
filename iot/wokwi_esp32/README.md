@@ -16,7 +16,7 @@ This directory contains a **Wokwi-compatible ESP32 Arduino project** that contin
    - `iot/wokwi_esp32/sketch.ino` → `sketch.ino`
    - `iot/wokwi_esp32/diagram.json` → `diagram.json`
    - `iot/wokwi_esp32/libraries.txt` → `libraries.txt`
-3. Create `config.h` in Wokwi (copied from `iot/wokwi_esp32/config.example.h`) and fill in your broker host, port, credentials, and unique topic.
+3. Create `config.h` in Wokwi (copied from `iot/wokwi_esp32/config.example.h`) and fill in your broker host, port, TLS/CA settings, `MQTT_NAMESPACE`, `MQTT_USERNAME`, `MQTT_PASSWORD`, and `MQTT_COMMAND_TOKEN` (for remote profile commands). Notice `sketch.ino` now also publishes periodic health heartbeats + LWT offline status on `<namespace>/<device_id>/heartbeat` and listens for authenticated `set_profile` commands on `<namespace>/<device_id>/command`.
 
 ---
 
@@ -82,8 +82,11 @@ make consumer LIMIT=50
 # Option C: Existing M3 ADWIN concept drift monitor (publishes to research.telemetry.drift)
 .venv/bin/python -m app.drift_monitor
 
-# Option D: Live SSE dashboard at http://127.0.0.1:8765
+# Option D: M10.1 Dark-Theme Streamlit Observatory
 make dashboard
+
+# Option E: Legacy M3 HTML/SSE dashboard at http://127.0.0.1:8765
+make sse-dashboard
 ```
 
 ---

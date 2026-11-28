@@ -16,6 +16,7 @@ htmlcov/
 # Local configuration (may contain machine-specific values or credentials)
 .env
 iot/wokwi_esp32/config.h
+.streamlit/secrets.toml
 
 # Demo run artefacts, generated reports, model weights/caches, and external datasets
 runs/

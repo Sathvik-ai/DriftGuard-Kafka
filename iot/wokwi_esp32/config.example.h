@@ -17,13 +17,24 @@
 #define MQTT_USERNAME ""
 #define MQTT_PASSWORD ""
 
-// Unique per-device identity and MQTT topic (replace <your-unique-namespace> with a random token)
+// Unique per-device identity and MQTT topics (replace <your-unique-namespace> with a random token)
 #define DEVICE_ID "esp32-wokwi-01"
 #define MACHINE_ID "machine_01"
-#define MQTT_TOPIC "driftguard/<your-unique-namespace>/esp32-wokwi-01/telemetry"
+#define MQTT_NAMESPACE "driftguard/<your-unique-namespace>"
+#define MQTT_TOPIC MQTT_NAMESPACE "/" DEVICE_ID "/telemetry"
+#define MQTT_HEARTBEAT_TOPIC MQTT_NAMESPACE "/" DEVICE_ID "/heartbeat"
+#define MQTT_COMMAND_TOPIC MQTT_NAMESPACE "/" DEVICE_ID "/command"
 
-// Telemetry publishing cadence in milliseconds (1000..5000 ms)
+// Shared command authorization token for remote set_profile commands.
+// Leave empty ("") if remote commands should be rejected by firmware.
+#define MQTT_COMMAND_TOKEN "CHANGE_ME_COMMAND_TOKEN"
+
+// Root CA PEM placeholder for production TLS brokers (leave NULL only for Wokwi sandboxed TLS tests)
+#define MQTT_ROOT_CA_PEM nullptr
+
+// Telemetry and heartbeat publishing cadences in milliseconds
 #define PUBLISH_INTERVAL_MS 2000UL
+#define HEARTBEAT_INTERVAL_MS 5000UL
 
 // Realistic simulated baseline operating ranges (NOT physical industrial sensors)
 #define BASE_TEMP_C 46.5f
