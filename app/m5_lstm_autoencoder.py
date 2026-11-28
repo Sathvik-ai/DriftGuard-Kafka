@@ -590,6 +590,47 @@ class LSTMAutoencoderDetector(BenchmarkDetector):
             return sq_err[:, -1, :]
         return torch.mean(sq_err, dim=1)
 
+    def _score_strided_windows(
+        self,
+        series: FloatArray,
+        dev: torch.device,
+    ) -> FloatArray:
+        """Fast 50%-overlapping causal window reconstruction for long series (>4,096 rows)."""
+        if self._model is None:
+            raise RuntimeError("LSTMAutoencoderDetector must be fitted before scoring")
+        n_rows, n_feats = series.shape
+        w = self._cfg.window_size
+        stride = max(1, w // 2)
+        starts = list(range(0, max(1, n_rows - w + 1), stride))
+        if n_rows >= w and starts[-1] != n_rows - w:
+            starts.append(n_rows - w)
+        windows = np.stack(
+            [
+                (
+                    series[s : s + w]
+                    if s + w <= n_rows
+                    else np.vstack([np.repeat(series[:1], w - n_rows, axis=0), series])
+                )
+                for s in starts
+            ],
+            axis=0,
+        ).astype(np.float32, copy=False)
+
+        accum = np.zeros((n_rows, n_feats), dtype=np.float64)
+        counts = np.zeros((n_rows, 1), dtype=np.float64)
+        bsz = max(self._cfg.eval_batch_size, 1024)
+        for b0 in range(0, windows.shape[0], bsz):
+            b1 = min(windows.shape[0], b0 + bsz)
+            batch_t = torch.from_numpy(windows[b0:b1]).to(dev)
+            recon_t, _ = self._model(batch_t)
+            sq_np = (batch_t - recon_t).pow(2).cpu().numpy().astype(np.float64)
+            for local_i, st in enumerate(starts[b0:b1]):
+                end = min(n_rows, st + w)
+                span = end - st
+                accum[st:end, :] += sq_np[local_i, -span:, :]
+                counts[st:end, :] += 1.0
+        return np.asarray(accum / np.maximum(counts, 1.0), dtype=np.float64)
+
     def score_details(
         self,
         matrix: FloatArray,
@@ -611,27 +652,33 @@ class LSTMAutoencoderDetector(BenchmarkDetector):
 
         with torch.inference_mode():
             if self._cfg.channel_mode == "multivariate":
-                for start, end, win_batch in iter_causal_window_batches(
-                    x_scaled, self._cfg.window_size, self._cfg.eval_batch_size
-                ):
-                    batch_t = torch.from_numpy(win_batch).to(dev)
-                    recon_t, _ = self._model(batch_t)
-                    sq_err = (batch_t - recon_t).pow(2)
-                    step_err = self._reduce_window_sq_error(sq_err)
-                    per_feature[start:end, :] = step_err.cpu().numpy().astype(np.float64)
-            else:
-                for ch_idx in range(n_feats):
-                    col = x_scaled[:, ch_idx : ch_idx + 1]
+                if n_rows > 4096:
+                    per_feature = self._score_strided_windows(x_scaled, dev)
+                else:
                     for start, end, win_batch in iter_causal_window_batches(
-                        col, self._cfg.window_size, self._cfg.eval_batch_size
+                        x_scaled, self._cfg.window_size, self._cfg.eval_batch_size
                     ):
                         batch_t = torch.from_numpy(win_batch).to(dev)
                         recon_t, _ = self._model(batch_t)
                         sq_err = (batch_t - recon_t).pow(2)
                         step_err = self._reduce_window_sq_error(sq_err)
-                        per_feature[start:end, ch_idx] = (
-                            step_err[:, 0].cpu().numpy().astype(np.float64)
-                        )
+                        per_feature[start:end, :] = step_err.cpu().numpy().astype(np.float64)
+            else:
+                for ch_idx in range(n_feats):
+                    col = x_scaled[:, ch_idx : ch_idx + 1]
+                    if n_rows > 4096:
+                        per_feature[:, ch_idx] = self._score_strided_windows(col, dev)[:, 0]
+                    else:
+                        for start, end, win_batch in iter_causal_window_batches(
+                            col, self._cfg.window_size, self._cfg.eval_batch_size
+                        ):
+                            batch_t = torch.from_numpy(win_batch).to(dev)
+                            recon_t, _ = self._model(batch_t)
+                            sq_err = (batch_t - recon_t).pow(2)
+                            step_err = self._reduce_window_sq_error(sq_err)
+                            per_feature[start:end, ch_idx] = (
+                                step_err[:, 0].cpu().numpy().astype(np.float64)
+                            )
 
         overall = np.asarray(np.mean(per_feature, axis=1), dtype=np.float64)
         return LSTMScoreOutput(

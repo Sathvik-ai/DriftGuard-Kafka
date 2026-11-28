@@ -329,6 +329,22 @@ M9 runs a unified, deterministic, multi-seed evaluation across all five deep-lea
 
 ---
 
+## 18. Milestone 9.1 (M9.1): Research Methodology Audit & Corrected Benchmark
+
+M9.1 audits and corrects the M9 evaluation methodology while preserving all historical M1–M9 artefacts (`app/m9_1_tracks.py`, `app/m9_1_stats.py`, `app/m9_1_profiler.py`, `app/m9_1_charts.py`, `app/m9_1_benchmark.py`, `configs/m9_1_eval.json`):
+
+- **Fair Dual-Track Input Protocol**: Evaluates every model family under both **Track A (`multivariate`)** on identical multivariate `(N, D)` windows and **Track B (`independent_channel`)** through `IndependentChannelWrapper` (identical active-channel selection, validation-only robust score normalization, mean aggregation, and validation-only calibration). Explicitly labels `TSB-AD-M` as a multivariate dataset (`2–248` features).
+- **Expanded Coverage & Chunked Long-Series TSFMs**: Scales TSB-AD-M to `max_per_domain=3` (`41` series across all `17` domains) and adds adaptive chunked long-horizon causal forecasting (`H=256` on series `>30,000` rows) plus deterministic 32-variate grouping for high-dimensional TSFM runs.
+- **Isolated Subprocess Resource Profiling (`app/m9_1_profiler.py`)**: Measures fresh-interpreter baseline RSS, model-load RSS delta, inference peak RSS delta, Apple Silicon MPS memory, and offline-batched latency/throughput per model in separate subprocesses.
+- **Validation-Only False-Positive Calibration & Bootstrap Uncertainty**: Evaluates 5 validation-only calibration strategies (`empirical_q99`, `empirical_q995`, `mad_z35`, `iqr_k30`, `evt_pot_q99`) on SKAB (`FA / 1k normal` vs fault F1) and computes 2,000-resample 95% bootstrap CIs and paired significance tests across 5 SKAB seeds and 3 TSB seeds.
+- **Run M9.1 Audited Benchmark**:
+  ```bash
+  make m9-1-demo
+  ```
+- **Reproducible Outputs (`reports/m9_1/<run_id>/`)**: `m9_1_report.md`, `m9_1_report.json`, `protocol_comparison.md`, 7 CSVs, and 5 pure-SVG charts.
+
+---
+
 ## 11. Automated Streaming Reports
 
 Every successful `make demo` run generates a structured report bundle under `reports/runs/<run_id>/` (ignored by git so experiment outputs are never committed):

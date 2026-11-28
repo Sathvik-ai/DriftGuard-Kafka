@@ -451,6 +451,76 @@ jobs:
               print("Validated M9 multi-seed evaluation & SVG charts successfully")
           PY
 
+      - name: Run lightweight M9.1 dual-track audit & calibration smoke test (CPU)
+        run: |
+          python - <<'PY'
+          import json, tempfile
+          from pathlib import Path
+          import numpy as np
+          from app.m9_1_benchmark import main as m9_1_main
+
+          rng = np.random.default_rng(42)
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              skab = root / "skab" / "data" / "valve1"
+              skab.mkdir(parents=True)
+              rows_fault = ["datetime;Accelerometer1RMS;Pressure;Temperature;anomaly;changepoint"]
+              for i in range(140):
+                  anom = 1 if 95 <= i < 120 else 0
+                  cp = 1 if i in (95, 120) else 0
+                  shift = 8.0 if anom else 0.0
+                  v1 = 0.5 + 0.03 * rng.normal() + 0.4 * shift
+                  p1 = 5.0 + 0.05 * rng.normal() + shift
+                  t1 = 50.0 + 0.1 * rng.normal() + 2.0 * shift
+                  rows_fault.append(
+                      f"2026-01-01 00:{i // 60:02d}:{i % 60:02d};{v1:.4f};{p1:.4f};{t1:.4f};{anom};{cp}"
+                  )
+              (skab / "0.csv").write_text("\n".join(rows_fault) + "\n", encoding="utf-8")
+
+              tsb = root / "tsb_ad_m"
+              (tsb / "TSB-AD-M").mkdir(parents=True)
+              fname = "001_Synth_id_1_Sensor_tr_80_1st_105.csv"
+              (tsb / "TSB-AD-M-Eva.csv").write_text(f"file_name\n{fname}\n", encoding="utf-8")
+              tsb_rows = ["ch0,ch1,Label"]
+              for i in range(140):
+                  lbl = 1 if 105 <= i < 125 else 0
+                  bump = 7.0 if lbl else 0.0
+                  c0 = float(np.sin(i / 5.0)) + 0.05 * rng.normal() + bump
+                  c1 = float(np.cos(i / 5.0)) + 0.05 * rng.normal() + bump
+                  tsb_rows.append(f"{c0:.5f},{c1:.5f},{lbl}")
+              (tsb / "TSB-AD-M" / fname).write_text("\n".join(tsb_rows) + "\n", encoding="utf-8")
+
+              cfg = root / "m9_1_ci.json"
+              cfg.write_text(json.dumps({
+                  "seeds_skab": [42, 1337],
+                  "seeds_tsb": [42, 1337],
+                  "device": "cpu",
+                  "calibration_quantile": 0.98,
+                  "calibration_strategies": ["empirical_q99", "mad_z35"],
+                  "tsb_max_per_domain": 1,
+                  "bootstrap_resamples": 200,
+                  "lstm": {"window_size": 8, "hidden_dim": 8, "latent_dim": 4, "num_layers": 1, "dropout": 0.0, "epochs": 2, "batch_size": 32},
+                  "tcn": {"window_size": 8, "hidden_channels": 8, "latent_dim": 4, "dilations": [1, 2], "dropout": 0.0, "epochs": 2, "batch_size": 32},
+                  "tranad": {"window_size": 8, "dim_feedforward": 8, "dropout": 0.0, "epochs": 2, "batch_size": 32},
+                  "tsfm": {"context_length": 16, "prediction_length": 8, "long_series_row_threshold": 50000, "long_series_prediction_length": 16, "max_multivariate_group_variates": 32, "max_independent_channels": 4, "max_forecast_blocks_per_series": 5000, "batch_size": 16}
+              }), encoding="utf-8")
+
+              out_m91 = root / "out_m9_1"
+              rc = m9_1_main([
+                  "--config", str(cfg),
+                  "--run-id", "ci_m9_1_smoke",
+                  "--skab-dir", str(root / "skab"),
+                  "--tsb-dir", str(tsb),
+                  "--mock-backends",
+                  "--skip-subprocess-profiler",
+                  "--output-dir", str(out_m91),
+              ])
+              assert rc == 0, f"m9_1_benchmark failed with exit code {rc}"
+              for name in ("m9_1_report.json", "m9_1_report.md", "protocol_comparison.md", "calibration_study.csv"):
+                  assert (out_m91 / name).exists()
+              print("Validated M9.1 dual-track audit & calibration smoke bundle successfully")
+          PY
+
   kafka-integration:
     name: Kafka Integration & Streaming Report
     runs-on: ubuntu-latest

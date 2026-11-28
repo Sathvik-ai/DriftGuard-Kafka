@@ -15,7 +15,7 @@ endif
 .DEFAULT_GOAL := help
 .PHONY: help setup kafka-up kafka-down kafka-clean kafka-logs kafka-verify topic-create \
         producer consumer test coverage lint format typecheck check demo m2-demo m3-demo \
-        m3-robustness m4-benchmark m5-demo m6-demo m7-demo m8-demo m9-demo dashboard clean
+        m3-robustness m4-benchmark m5-demo m6-demo m7-demo m8-demo m9-demo m9-1-demo dashboard clean
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -104,6 +104,9 @@ m8-demo: ## Run M8 zero-shot Chronos-2 & TimesFM 3.0 vs M4–M7 benchmark
 
 m9-demo: ## Run M9 comprehensive multi-seed comparative evaluation & charts
 	./scripts/run_m9_demo.sh $(if $(TSB_MAX_PER_DOMAIN),$(TSB_MAX_PER_DOMAIN),1)
+
+m9-1-demo: ## Run M9.1 dual-track audited benchmark, calibration study & isolated profiler
+	./scripts/run_m9_1_demo.sh $(if $(TSB_MAX_PER_DOMAIN),$(TSB_MAX_PER_DOMAIN),1)
 
 dashboard: ## Launch live real-time streaming dashboard at http://127.0.0.1:8765
 	$(PY) -m app.live_dashboard --port 8765
