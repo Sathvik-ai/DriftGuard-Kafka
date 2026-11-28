@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "author": "DriftGuard-Kafka M10-IoT",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht_temp",
+      "top": -110,
+      "left": 180,
+      "attrs": { "temperature": "46.5", "humidity": "45" }
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot_vib",
+      "top": 10,
+      "left": -170,
+      "attrs": { "value": "120" }
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot_press",
+      "top": 120,
+      "left": -170,
+      "attrs": { "value": "250" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_profile",
+      "top": 140,
+      "left": 190,
+      "attrs": { "color": "blue", "label": "Profile" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_mqtt",
+      "top": -40,
+      "left": 280,
+      "attrs": { "color": "green", "label": "MQTT" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_fault",
+      "top": 40,
+      "left": 280,
+      "attrs": { "color": "red", "label": "Profile" }
+    }
+  ],
+  "connections": [
+    ["esp:TX", "$serialMonitor:RX", "", []],
+    ["esp:RX", "$serialMonitor:TX", "", []],
+    ["dht_temp:VCC", "esp:3V3", "red", []],
+    ["dht_temp:GND", "esp:GND.1", "black", []],
+    ["dht_temp:SDA", "esp:15", "green", []],
+    ["pot_vib:VCC", "esp:3V3", "red", []],
+    ["pot_vib:GND", "esp:GND.2", "black", []],
+    ["pot_vib:SIG", "esp:34", "orange", []],
+    ["pot_press:VCC", "esp:3V3", "red", []],
+    ["pot_press:GND", "esp:GND.2", "black", []],
+    ["pot_press:SIG", "esp:35", "purple", []],
+    ["btn_profile:1.l", "esp:4", "blue", []],
+    ["btn_profile:2.l", "esp:GND.3", "black", []],
+    ["led_mqtt:A", "esp:2", "green", []],
+    ["led_mqtt:C", "esp:GND.3", "black", []],
+    ["led_fault:A", "esp:5", "red", []],
+    ["led_fault:C", "esp:GND.3", "black", []]
+  ],
+  "dependencies": {}
+}

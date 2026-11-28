@@ -14,18 +14,31 @@ import json
 import math
 import re
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 MACHINE_ID_PATTERN = re.compile(r"^machine_\d{2,}$")
+DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # ISO 8601 UTC with mandatory "Z" suffix and optional fractional seconds.
 TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$")
 
 
 class SchemaValidationError(ValueError):
     """Raised when data does not satisfy the telemetry event schema."""
+
+
+class SourceType(str, Enum):
+    """Origin of a telemetry event on `research.telemetry.raw`.
+
+    Distinguishes online virtual IoT streams (M10-IoT) from the local Python
+    synthetic simulator (M1–M3) and offline benchmark replays.
+    """
+
+    SIMULATOR = "simulator"
+    VIRTUAL_IOT_WOKWI = "virtual_iot_wokwi"
+    BENCHMARK_REPLAY = "benchmark_replay"
 
 
 class EventLabel(str, Enum):
@@ -68,6 +81,8 @@ _SENSOR_RANGES: dict[str, SensorRange] = {
 REQUIRED_FIELDS: frozenset[str] = frozenset(
     {"event_id", "machine_id", "timestamp", *_SENSOR_RANGES, "label"}
 )
+OPTIONAL_FIELDS: frozenset[str] = frozenset({"source_type", "device_id", "sequence_number"})
+ALLOWED_FIELDS: frozenset[str] = REQUIRED_FIELDS | OPTIONAL_FIELDS
 
 
 def format_utc_timestamp(moment: datetime) -> str:
@@ -133,9 +148,33 @@ def _validate_label(label: object) -> None:
         raise SchemaValidationError(f"label must be one of {allowed}, got {label!r}")
 
 
+def _validate_source_type(source_type: object) -> None:
+    allowed = [member.value for member in SourceType]
+    if not isinstance(source_type, SourceType) and source_type not in allowed:
+        raise SchemaValidationError(f"source_type must be one of {allowed}, got {source_type!r}")
+
+
+def _validate_device_id(device_id: object) -> None:
+    if device_id is None:
+        return
+    if not isinstance(device_id, str) or not DEVICE_ID_PATTERN.match(device_id):
+        raise SchemaValidationError(
+            f"device_id must be 1-64 alphanumeric/._- chars, got {device_id!r}"
+        )
+
+
+def _validate_sequence_number(sequence_number: object) -> None:
+    if sequence_number is None:
+        return
+    if isinstance(sequence_number, bool) or not isinstance(sequence_number, int):
+        raise SchemaValidationError(f"sequence_number must be an integer, got {sequence_number!r}")
+    if sequence_number < 0:
+        raise SchemaValidationError(f"sequence_number must be non-negative, got {sequence_number}")
+
+
 @dataclass(frozen=True)
 class TelemetryEvent:
-    """One sensor reading from one simulated machine.
+    """One sensor reading from one simulated or virtual IoT machine.
 
     Construction validates every field and raises `SchemaValidationError`
     on the first problem found.
@@ -148,6 +187,9 @@ class TelemetryEvent:
     vibration_mm_s: float
     pressure_bar: float
     label: EventLabel = EventLabel.NORMAL
+    source_type: SourceType = SourceType.SIMULATOR
+    device_id: str | None = None
+    sequence_number: int | None = None
 
     def __post_init__(self) -> None:
         """Validate all fields; called automatically by the dataclass constructor."""
@@ -157,30 +199,47 @@ class TelemetryEvent:
         for field_name in _SENSOR_RANGES:
             _validate_sensor_value(field_name, getattr(self, field_name))
         _validate_label(self.label)
-        # Normalise a plain "normal" string into the enum for a consistent type.
+        _validate_source_type(self.source_type)
+        _validate_device_id(self.device_id)
+        _validate_sequence_number(self.sequence_number)
+        # Normalise plain strings into enums for consistent types.
         object.__setattr__(self, "label", EventLabel(self.label))
+        object.__setattr__(self, "source_type", SourceType(self.source_type))
 
     @classmethod
     def from_dict(cls, data: object) -> TelemetryEvent:
         """Build a validated event from a decoded JSON object.
 
-        Unknown fields are rejected so that schema drift between producer
-        and consumer is detected immediately instead of silently ignored.
+        Unknown fields outside `ALLOWED_FIELDS` are rejected so schema drift
+        between producer and consumer is detected immediately.
         """
         if not isinstance(data, dict):
             raise SchemaValidationError(f"event must be a JSON object, got {type(data).__name__}")
         missing = REQUIRED_FIELDS - data.keys()
         if missing:
             raise SchemaValidationError(f"missing required fields: {sorted(missing)}")
-        unexpected = data.keys() - REQUIRED_FIELDS
+        unexpected = data.keys() - ALLOWED_FIELDS
         if unexpected:
             raise SchemaValidationError(f"unexpected fields: {sorted(unexpected)}")
         return cls(**data)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable dictionary representation."""
-        payload = asdict(self)
-        payload["label"] = self.label.value
+        payload: dict[str, Any] = {
+            "event_id": self.event_id,
+            "machine_id": self.machine_id,
+            "timestamp": self.timestamp,
+            "temperature_c": self.temperature_c,
+            "vibration_mm_s": self.vibration_mm_s,
+            "pressure_bar": self.pressure_bar,
+            "label": self.label.value,
+        }
+        if self.source_type is not SourceType.SIMULATOR:
+            payload["source_type"] = self.source_type.value
+        if self.device_id is not None:
+            payload["device_id"] = self.device_id
+        if self.sequence_number is not None:
+            payload["sequence_number"] = self.sequence_number
         return payload
 
     def to_json_bytes(self) -> bytes:

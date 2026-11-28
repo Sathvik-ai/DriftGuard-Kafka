@@ -681,6 +681,11 @@ jobs:
           print(f"Validated 10-seed robustness bundle in {out}")
           PY
 
+      - name: Run live M10-IoT MQTT-to-Kafka-to-Detector smoke test
+        env:
+          PYTHON_BIN: python
+        run: ./scripts/run_m10_iot_smoke.sh
+
       - name: Print failure diagnostics
         if: failure()
         run: |

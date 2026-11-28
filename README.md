@@ -345,6 +345,20 @@ M9.1 audits and corrects the M9 evaluation methodology while preserving all hist
 
 ---
 
+## 19. Milestone 10-IoT (M10-IoT): Online Virtual ESP32 (Wokwi) & MQTT-to-Kafka Bridge
+
+M10-IoT integrates a continuously running **Wokwi virtual ESP32** (`iot/wokwi_esp32/`) into the existing DriftGuard-Kafka pipeline via a Python MQTT-to-Kafka bridge (`app/mqtt_bridge.py`, `paho-mqtt==2.1.0`):
+
+- **Architecture**: `Wokwi ESP32` → reachable MQTT relay broker → `app/mqtt_bridge.py` → existing `research.telemetry.raw` Kafka topic (keyed by `machine_id`, tagged with `source_type="virtual_iot_wokwi"`, `device_id`, `sequence_number`) → existing `app/consumer.py`, `app/detector.py`, `app/drift_monitor.py`, and `app/live_dashboard.py`.
+- **6 Selectable Virtual Profiles**: `normal`, `temperature_spike`, `vibration_anomaly`, `gradual_drift`, `abrupt_drift`, and `intermittent_disconnect`. All readings are explicitly documented as simulated virtual measurements.
+- **IoT Status Monitoring**: Generates `reports/m10_iot/<run_id>/iot_status.{json,md}` tracking connection state, last message timestamp, received/forwarded/invalid counts, sequence gaps, reconnections, and ingestion latency.
+- **Setup & Live Smoke Test**: See `iot/wokwi_esp32/README.md` for full Wokwi + cloud MQTT relay instructions, or run the local end-to-end MQTT-to-Kafka-to-Detector smoke test:
+  ```bash
+  make m10-iot-smoke
+  ```
+
+---
+
 ## 11. Automated Streaming Reports
 
 Every successful `make demo` run generates a structured report bundle under `reports/runs/<run_id>/` (ignored by git so experiment outputs are never committed):
